@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
 import { swarmSearch, DEFAULTS } from './swarm.mjs';
 import { detectAvailable, PROVIDERS } from './providers/index.mjs';
 
-export const SERVER_INFO = { name: 'swarm-search', version: '0.1.0' };
+export const SERVER_INFO = { name: 'swarm-search', version: '0.2.0' };
 const PROTOCOL_VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
@@ -23,7 +23,22 @@ export const TOOLS = [
         query: { type: 'string', description: 'The research question or what to find.' },
         mode: { type: 'string', enum: ['auto', 'web', 'files'], description: 'auto = files if paths given, else web.' },
         paths: { type: 'array', items: { type: 'string' }, description: 'Local files/directories to scan (files mode).' },
-        workers: { type: 'integer', minimum: 1, maximum: DEFAULTS.maxWorkers, description: `Parallel workers (default ${DEFAULTS.workers}).` },
+        workers: {
+          type: 'integer',
+          minimum: 1,
+          maximum: DEFAULTS.maxWorkers,
+          description: `Fixed number of parallel workers. Omit for auto: the planner decides how many independent angles the question has (1-${DEFAULTS.maxAutoWorkers}).`,
+        },
+        rounds: {
+          type: 'integer',
+          enum: [1, 2],
+          description: 'Default 1. Use 2 for contested or uncertain questions: a second round runs after workers see round-1 results (see round2).',
+        },
+        round2: {
+          type: 'string',
+          enum: ['gaps', 'critique'],
+          description: '"gaps" (default): an auditor lists contradictions and unanswered parts, targeted follow-up workers resolve them. "critique": every worker reviews the others\' reports and confirms/disputes claims with sources (costs N extra calls).',
+        },
         provider: {
           type: 'string',
           description:
@@ -64,6 +79,8 @@ export async function callTool(name, args = {}, { onProgress, signal } = {}) {
       synthModel: args.synth_model,
       angles: args.angles,
       language: args.language,
+      rounds: args.rounds,
+      round2: args.round2,
       onProgress,
       signal,
     });

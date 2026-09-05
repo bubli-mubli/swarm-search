@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseAngles, fallbackAngles, runPool, swarmSearch } from '../src/swarm.mjs';
+import { parseAngles, fallbackAngles, runPool, swarmSearch, parseFollowups, resolveWorkers } from '../src/swarm.mjs';
 import { collectFiles, buildShards } from '../src/corpus.mjs';
 import { handleMessage, TOOLS, createSession, originAllowed } from '../src/mcp.mjs';
 import { resolveProviders } from '../src/providers/index.mjs';
@@ -23,6 +23,22 @@ test('parseAngles extracts a JSON array even when wrapped in prose/fences', () =
   assert.deepEqual(parseAngles('["a","b","c"]', 2), ['a', 'b']);
   assert.equal(parseAngles('no json here', 3), null);
   assert.equal(parseAngles('[1, 2]', 3), null);
+});
+
+test('parseFollowups extracts followups object, tolerates junk', () => {
+  assert.deepEqual(parseFollowups('ok:\n{"followups": ["a", " b "]}', 4), ['a', 'b']);
+  assert.deepEqual(parseFollowups('{"followups": []}', 4), []);
+  assert.deepEqual(parseFollowups('nothing', 4), []);
+  assert.deepEqual(parseFollowups('{"followups": ["a","b","c"]}', 2), ['a', 'b']);
+});
+
+test('resolveWorkers: auto by default, number when given, capped', () => {
+  assert.equal(resolveWorkers(undefined), null);
+  assert.equal(resolveWorkers('auto'), null);
+  assert.equal(resolveWorkers(3), 3);
+  assert.equal(resolveWorkers('5'), 5);
+  assert.equal(resolveWorkers(99), 12);
+  assert.equal(resolveWorkers(0), null);
 });
 
 test('fallbackAngles yields exactly n angles', () => {
@@ -132,8 +148,105 @@ test('swarmSearch runs plan → workers → synthesis with a fake provider', asy
     assert.ok(report.workers.every((w) => w.ok));
     assert.match(markdown, /ANSWER built from/);
     assert.match(markdown, /angle one/);
-    assert.match(markdown, /swarm-search · mode: web · workers: 2/);
+    assert.match(markdown, /swarm-search · mode: web · workers: 2 \(fixed;/);
     assert.equal(calls.filter((c) => c.startsWith('You are one worker')).length, 2);
+  } finally {
+    delete byId.fake;
+  }
+});
+
+test('swarmSearch auto sizing: planner decides the worker count', async () => {
+  const prompts = [];
+  const { byId } = await import('../src/providers/index.mjs');
+  byId.fake = {
+    id: 'fake', family: 'fake', defaultModel: 'm', detect: () => true,
+    async complete({ system, prompt }) {
+      if (system.startsWith('You split')) {
+        prompts.push(prompt);
+        return { text: '["only one angle"]' };
+      }
+      if (system.startsWith('You are one worker')) return { text: '## Findings\n- x (https://x)' };
+      return { text: 'ANSWER' };
+    },
+  };
+  try {
+    const { report, markdown } = await swarmSearch({ query: 'what is the current Node LTS version', provider: 'fake' });
+    assert.equal(report.plannedBy, 'auto');
+    assert.equal(report.workers.length, 1);
+    assert.match(prompts[0], /from 1 to 8/);
+    assert.match(markdown, /workers: 1 \(auto;/);
+  } finally {
+    delete byId.fake;
+  }
+});
+
+test('swarmSearch rounds=2 gaps: audit → follow-ups → synthesis sees round 2', async () => {
+  const seen = { synth: '' };
+  const { byId } = await import('../src/providers/index.mjs');
+  byId.fake = {
+    id: 'fake', family: 'fake', defaultModel: 'm', detect: () => true,
+    async complete({ system, prompt }) {
+      if (system.startsWith('You split')) return { text: '["a","b"]' };
+      if (system.startsWith('You audit')) return { text: '{"followups": ["resolve conflict about X"]}' };
+      if (system.startsWith('You are one worker')) return { text: `## Findings\n- about ${prompt.slice(-30)} (https://x)` };
+      seen.synth = prompt;
+      return { text: 'ANSWER' };
+    },
+  };
+  try {
+    const { report, markdown } = await swarmSearch({ query: 'q', provider: 'fake', rounds: 2 });
+    assert.equal(report.round2Mode, 'gaps');
+    assert.equal(report.round2.length, 1);
+    assert.match(report.round2[0].label, /^follow-up: resolve conflict/);
+    assert.match(seen.synth, /## Round 2 \(gap-filling follow-ups\)/);
+    assert.match(markdown, /round 2: gaps: 1 follow-ups/);
+  } finally {
+    delete byId.fake;
+  }
+});
+
+test('swarmSearch rounds=2 gaps with no gaps skips follow-ups', async () => {
+  const { byId } = await import('../src/providers/index.mjs');
+  byId.fake = {
+    id: 'fake', family: 'fake', defaultModel: 'm', detect: () => true,
+    async complete({ system }) {
+      if (system.startsWith('You split')) return { text: '["a"]' };
+      if (system.startsWith('You audit')) return { text: '{"followups": []}' };
+      if (system.startsWith('You are one worker')) return { text: '## Findings\n- x (https://x)' };
+      return { text: 'ANSWER' };
+    },
+  };
+  try {
+    const { report, markdown } = await swarmSearch({ query: 'q', provider: 'fake', rounds: 2 });
+    assert.equal(report.round2.length, 0);
+    assert.match(markdown, /round 2: gaps: none found/);
+  } finally {
+    delete byId.fake;
+  }
+});
+
+test('swarmSearch rounds=2 critique: each worker sees the others', async () => {
+  const critiquePrompts = [];
+  const { byId } = await import('../src/providers/index.mjs');
+  byId.fake = {
+    id: 'fake', family: 'fake', defaultModel: 'm', detect: () => true,
+    async complete({ system, prompt }) {
+      if (system.startsWith('You split')) return { text: '["a","b","c"]' };
+      if (system.startsWith('You are a worker in a research swarm, now in the critique')) {
+        critiquePrompts.push(prompt);
+        return { text: '## Confirmed\n- ok\n## Disputed\n- none' };
+      }
+      if (system.startsWith('You are one worker')) return { text: `## Findings\n- from ${prompt.slice(-1)} (https://x)` };
+      return { text: 'ANSWER' };
+    },
+  };
+  try {
+    const { report, markdown } = await swarmSearch({ query: 'q', provider: 'fake', rounds: 2, round2: 'critique', workers: 3 });
+    assert.equal(report.round2.length, 3);
+    assert.equal(critiquePrompts.length, 3);
+    assert.match(critiquePrompts[0], /## Your first-round report/);
+    assert.equal((critiquePrompts[0].match(/### Report [A-Z]/g) || []).length, 2);
+    assert.match(markdown, /round 2: critique: 3\/3/);
   } finally {
     delete byId.fake;
   }

@@ -1,6 +1,6 @@
 {
   "name": "swarm-search",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Swarm search: parallel cheap LLM workers (Claude Haiku, GPT, Gemini) research a question or scan files, then one synthesizer writes the summary. Ships as an MCP server + Claude Code plugin.",
   "type": "module",
   "bin": {

@@ -8,8 +8,12 @@ import { planInstall, CLIENTS } from '../src/install.mjs';
 const USAGE = `swarm-search — parallel LLM workers + one synthesizer
 
 Usage:
-  swarm-search run "<question>" [--workers N] [--provider P] [--model M] [--paths a,b] [--mode web|files]
+  swarm-search run "<question>" [--workers N|auto] [--rounds 1|2] [--round2 gaps|critique]
+                                [--provider P] [--model M] [--paths a,b] [--mode web|files]
                                 [--synth-provider P] [--synth-model M] [--language ru] [--json]
+    workers: omit (auto) and the planner decides how many angles the question has (1-8);
+    rounds 2: a second round after workers see round-1 results — "gaps" fills contradictions and
+    unanswered parts with targeted follow-ups, "critique" makes every worker review the others.
   swarm-search mcp                      MCP server over stdio (Claude Code/Desktop, Codex, Antigravity, Gemini CLI)
   swarm-search mcp --http [--port 8787] [--host 0.0.0.0] [--token SECRET]
                                         MCP over Streamable HTTP (ChatGPT connectors, remote clients)
@@ -18,7 +22,8 @@ Usage:
                                         Print (or with --write apply) config for: ${CLIENTS.join(', ')}
 
 Providers: auto | mixed | ${PROVIDERS.map((p) => p.id).join(' | ')}   (add ":model" to pin a model)
-Env: SWARM_PROVIDER, SWARM_WORKERS, SWARM_TIMEOUT_MS, SWARM_SHARD_CHARS, SWARM_HTTP_TOKEN,
+Env: SWARM_PROVIDER, SWARM_WORKERS (fixed default; unset = auto), SWARM_MAX_AUTO_WORKERS, SWARM_ROUNDS, SWARM_ROUND2,
+     SWARM_TIMEOUT_MS, SWARM_SHARD_CHARS, SWARM_HTTP_TOKEN, SWARM_HTTP_ALLOWED_ORIGINS,
      SWARM_CLAUDE_MODEL, SWARM_CODEX_MODEL, SWARM_AGY_MODEL, SWARM_GEMINI_MODEL,
      SWARM_ANTHROPIC_MODEL, SWARM_OPENAI_MODEL, SWARM_GOOGLE_MODEL, SWARM_OPENROUTER_MODEL
 `;
@@ -99,6 +104,8 @@ async function main() {
         synthProvider: flags['synth-provider'],
         synthModel: flags['synth-model'],
         language: flags.language,
+        rounds: flags.rounds,
+        round2: flags.round2,
         onProgress: (m) => process.stderr.write(`· ${m}\n`),
       });
       if (flags.json) console.log(JSON.stringify({ markdown, report }, null, 2));

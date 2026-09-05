@@ -23,18 +23,34 @@ Ships as:
 ## How it works
 
 ```
-question ──► planner (1 call) ──► N sub-questions
+question ──► planner (1 call) ──► N sub-questions (N chosen by the planner, 1–8)
                                       │
                  ┌────────────────────┼────────────────────┐
                  ▼                    ▼                    ▼
            worker 1 (web)       worker 2 (web)   ...  worker N (web)      ← Haiku / GPT / Gemini
                  └────────────────────┼────────────────────┘
                                       ▼
+               optional round 2: gap-filling follow-ups  or  cross-critique
+                                      ▼
                              synthesizer (1 call) ──► answer + [n] sources
 ```
 
+**Who decides how many workers?** By default the planner: it reads the question and returns one
+sub-question per genuinely independent angle, so a narrow fact costs one worker and a five-way
+comparison gets five. Pass `workers: N` to force a number.
+
+**Do workers talk to each other?** Not in round 1: independence is what makes the synthesis catch
+errors. With `rounds: 2` they do, after the fact:
+
+- `round2: "gaps"` (default) — an auditor reads all round-1 reports, lists contradictions and
+  unanswered parts, and a few targeted follow-up workers resolve just those. Cheap: 1 + up to 4 calls.
+- `round2: "critique"` — every worker sees the anonymized reports of the others and replies with
+  Confirmed / Disputed / Retracted / Missing, with sources. N extra calls. Strongest with
+  `provider: "mixed"`, where Claude, GPT and Gemini check each other.
+
 In **files mode** (`paths` given) the corpus is sharded instead: every worker reads a slice of files
-with line numbers and reports `path:line` findings; the synthesizer merges them.
+with line numbers and reports `path:line` findings; the synthesizer merges them. Round 2 in files
+mode re-reads the shards that had findings with the follow-up questions.
 
 ## Requirements
 
@@ -115,7 +131,9 @@ support; use Antigravity or Gemini CLI for Gemini.
 | `query` | the question (required) |
 | `mode` | `auto` (default) · `web` · `files` |
 | `paths` | files/dirs to scan → files mode |
-| `workers` | parallel workers, default 4, max 12 |
+| `workers` | fixed worker count (max 12); omit for auto sizing by the planner |
+| `rounds` | `1` (default) or `2` |
+| `round2` | `gaps` (default) or `critique` |
 | `provider` | `auto` · `mixed` · provider id · `id:model` · comma list for round-robin |
 | `model` | worker model override |
 | `synth_provider`, `synth_model` | use a stronger model for the final synthesis only |
@@ -129,7 +147,7 @@ support; use Antigravity or Gemini CLI for Gemini.
 ```bash
 swarm-search run "state of WebGPU in 2026: browser support, frameworks, gotchas" --workers 6
 swarm-search run "where do we validate JWT?" --paths src,server --provider codex-cli
-swarm-search run "is Bun ready for production?" --provider mixed --synth-provider claude-cli:sonnet
+swarm-search run "is Bun ready for production?" --provider mixed --rounds 2 --round2 critique --synth-provider claude-cli:sonnet
 swarm-search run "..." --json           # full report with per-worker output
 ```
 
@@ -138,7 +156,9 @@ swarm-search run "..." --json           # full report with per-worker output
 | variable | default | purpose |
 |---|---|---|
 | `SWARM_PROVIDER` | `auto` | default provider spec |
-| `SWARM_WORKERS` | `4` | default worker count |
+| `SWARM_WORKERS` | unset = auto | fixed default worker count |
+| `SWARM_MAX_AUTO_WORKERS` | `8` | upper bound for auto sizing |
+| `SWARM_ROUNDS` / `SWARM_ROUND2` | `1` / `gaps` | default rounds and round-2 mode |
 | `SWARM_TIMEOUT_MS` | `180000` | per-call timeout |
 | `SWARM_SHARD_CHARS` | `60000` | max characters per files-mode shard |
 | `SWARM_HTTP_TOKEN` | – | bearer token for `mcp --http` (required when binding a non-loopback host) |
@@ -148,7 +168,7 @@ swarm-search run "..." --json           # full report with per-worker output
 ## Cost and time
 
 A 4-worker web run is 6 model calls (1 plan + 4 workers + 1 synthesis) and takes 1–3 minutes with
-CLI backends. CLI providers run on your subscriptions; API providers bill per token. Workers are
+CLI backends. Round 2 adds 1 audit + up to 4 follow-ups (`gaps`) or N critiques (`critique`). CLI providers run on your subscriptions; API providers bill per token. Workers are
 read-only: `claude -p` gets only WebSearch/WebFetch, `codex exec` runs with `-s read-only`,
 `agy`/`gemini` run in plan mode.
 
