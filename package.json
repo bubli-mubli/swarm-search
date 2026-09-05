@@ -1,0 +1,35 @@
+{
+  "name": "swarm-search",
+  "version": "0.1.0",
+  "description": "Swarm search: parallel cheap LLM workers (Claude Haiku, GPT, Gemini) research a question or scan files, then one synthesizer writes the summary. Ships as an MCP server + Claude Code plugin.",
+  "type": "module",
+  "bin": {
+    "swarm-search": "bin/swarm-search.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "commands",
+    "skills",
+    ".claude-plugin",
+    ".mcp.json",
+    "README.md",
+    "README.ru.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "mcp": "node bin/swarm-search.mjs mcp",
+    "smoke": "node bin/swarm-search.mjs providers"
+  },
+  "keywords": ["mcp", "claude-code", "plugin", "swarm", "research", "haiku", "gpt", "gemini"],
+  "author": "jumpleGo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jumpleGo/swarm-search"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "swarm-search",
+  "displayName": "Swarm Search",
+  "version": "0.1.0",
+  "description": "Parallel swarm research: N cheap workers (Claude Haiku by default, or GPT/Gemini) search the web or scan files, one synthesizer writes a sourced summary.",
+  "author": { "name": "jumpleGo", "url": "https://github.com/jumpleGo" },
+  "homepage": "https://github.com/jumpleGo/swarm-search",
+  "repository": "https://github.com/jumpleGo/swarm-search",
+  "license": "MIT",
+  "keywords": ["research", "swarm", "haiku", "parallel", "web-search", "mcp"]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "jumplego",
+  "owner": { "name": "jumpleGo", "url": "https://github.com/jumpleGo" },
+  "metadata": { "description": "Plugins by jumpleGo" },
+  "plugins": [
+    {
+      "name": "swarm-search",
+      "displayName": "Swarm Search",
+      "description": "Parallel swarm research with cheap workers (Haiku / GPT / Gemini) and a synthesized, sourced summary.",
+      "source": "./",
+      "version": "0.1.0",
+      "category": "productivity"
+    }
+  ]
+}

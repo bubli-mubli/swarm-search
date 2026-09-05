@@ -1,0 +1,6 @@
+{
+  "swarm-search": {
+    "command": "node",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/bin/swarm-search.mjs", "mcp"]
+  }
+}
