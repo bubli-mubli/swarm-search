@@ -1,7 +1,8 @@
 // Регистрация MCP-сервера в конфигах клиентов: Claude Desktop, Codex, Antigravity, Gemini CLI, Claude Code.
 import { readFile, writeFile, copyFile, mkdir } from 'node:fs/promises';
+import { accessSync, constants } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
@@ -18,8 +19,24 @@ function claudeDesktopConfigPath() {
   return join(home, '.config', 'Claude', 'claude_desktop_config.json');
 }
 
+// Путь к node: предпочитаем стабильную ссылку из PATH (например /opt/homebrew/bin/node),
+// а не process.execPath, который у Homebrew указывает на версионную папку Cellar и протухает при обновлении.
+export function nodeCommand() {
+  const dirs = (process.env.PATH || '').split(delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = join(dir, platform() === 'win32' ? 'node.exe' : 'node');
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // ищем дальше
+    }
+  }
+  return process.execPath;
+}
+
 export function stdioEntry() {
-  return { command: process.execPath, args: [BIN_PATH, 'mcp'] };
+  return { command: nodeCommand(), args: [BIN_PATH, 'mcp'] };
 }
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -99,8 +116,10 @@ export function planInstall(client) {
           } catch (err) {
             if (err.code !== 'ENOENT') throw err;
           }
-          if (current.includes(`[mcp_servers.${SERVER_NAME}]`)) return `${path} (already present)`;
-          await writeWithBackup(path, current.trimEnd() + '\n' + tomlBlock());
+          // Старый блок вырезаем целиком (до следующей секции), чтобы установка была идемпотентной.
+          const re = new RegExp(`\\n?\\[mcp_servers\\.${SERVER_NAME}\\][^\\[]*`, 'g');
+          const cleaned = current.replace(re, '\n');
+          await writeWithBackup(path, cleaned.trimEnd() + '\n' + tomlBlock());
           return path;
         },
         after: 'Codex CLI and the ChatGPT desktop Codex app read this file on next start.',
@@ -113,6 +132,11 @@ export function planInstall(client) {
         summary: `run: ${cmd.join(' ')}`,
         snippet: cmd.join(' '),
         apply: () => {
+          try {
+            execFileSync('agy', ['mcp', 'remove', SERVER_NAME], { stdio: 'ignore' });
+          } catch {
+            // не было — нормально
+          }
           execFileSync(cmd[0], cmd.slice(1), { stdio: 'inherit' });
           return 'agy mcp list';
         },
