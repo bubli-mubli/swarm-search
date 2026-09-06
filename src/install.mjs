@@ -78,6 +78,19 @@ async function mergeJsonConfig(path, key) {
   return path;
 }
 
+// Вырезает наш старый блок [mcp_servers.swarm-search] вместе с его строками до следующей секции
+// (строка, начинающаяся с `[`). Внутри блока могут быть `[` в значениях (args = [...]) — их не трогаем.
+export function stripTomlBlock(current) {
+  const lines = current.split('\n');
+  const out = [];
+  let skipping = false;
+  for (const line of lines) {
+    if (/^\s*\[/.test(line)) skipping = line.trim() === `[mcp_servers.${SERVER_NAME}]`;
+    if (!skipping) out.push(line);
+  }
+  return out.join('\n');
+}
+
 function tomlBlock() {
   const { command, args } = stdioEntry();
   return `\n[mcp_servers.${SERVER_NAME}]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\nstartup_timeout_sec = 30\n`;
@@ -116,10 +129,7 @@ export function planInstall(client) {
           } catch (err) {
             if (err.code !== 'ENOENT') throw err;
           }
-          // Старый блок вырезаем целиком (до следующей секции), чтобы установка была идемпотентной.
-          const re = new RegExp(`\\n?\\[mcp_servers\\.${SERVER_NAME}\\][^\\[]*`, 'g');
-          const cleaned = current.replace(re, '\n');
-          await writeWithBackup(path, cleaned.trimEnd() + '\n' + tomlBlock());
+          await writeWithBackup(path, stripTomlBlock(current).trimEnd() + '\n' + tomlBlock());
           return path;
         },
         after: 'Codex CLI and the ChatGPT desktop Codex app read this file on next start.',

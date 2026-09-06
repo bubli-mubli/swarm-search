@@ -10,6 +10,7 @@ import { parseAngles, fallbackAngles, runPool, swarmSearch, parseFollowups, reso
 import { collectFiles, buildShards } from '../src/corpus.mjs';
 import { handleMessage, TOOLS, createSession, originAllowed } from '../src/mcp.mjs';
 import { resolveProviders } from '../src/providers/index.mjs';
+import { stripTomlBlock } from '../src/install.mjs';
 import { claudeCli } from '../src/providers/claude-cli.mjs';
 import { codexCli } from '../src/providers/codex-cli.mjs';
 import { agyCli } from '../src/providers/agy-cli.mjs';
@@ -318,4 +319,27 @@ test('MCP stdio server answers a real handshake', async () => {
   const lines = out.trim().split('\n').map((l) => JSON.parse(l));
   assert.equal(lines[0].id, 1);
   assert.equal(lines[1].result.tools[0].name, 'swarm_search');
+});
+
+test('stripTomlBlock removes only our block, keeps args with brackets elsewhere intact', () => {
+  const cfg = [
+    'model = "x"',
+    '',
+    '[mcp_servers.other]',
+    'command = "a"',
+    'args = ["b", "c"]',
+    '',
+    '[mcp_servers.swarm-search]',
+    'command = "/old/node"',
+    'args = ["/old/swarm-search.mjs","mcp"]',
+    'startup_timeout_sec = 30',
+    '',
+    '[projects."/x"]',
+    'trust_level = "trusted"',
+  ].join('\n');
+  const out = stripTomlBlock(cfg);
+  assert.ok(!out.includes('swarm-search'));
+  assert.ok(out.includes('args = ["b", "c"]'));
+  assert.ok(out.includes('[projects."/x"]\ntrust_level = "trusted"'));
+  assert.equal(stripTomlBlock('a = 1\n'), 'a = 1\n');
 });
