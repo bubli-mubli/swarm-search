@@ -43,7 +43,7 @@ export const TOOLS = [
           type: 'string',
           description:
             'Worker provider: auto | mixed | ' + PROVIDERS.map((p) => p.id).join(' | ') + '. ' +
-            'Optional model after colon, e.g. "claude-cli:haiku" or "codex-cli:gpt-5-mini". Comma-separate to round-robin.',
+            'Optional model after colon, e.g. "claude-cli:haiku" or "openrouter:deepseek/deepseek-v4.1-flash". Comma-separate to round-robin.',
         },
         model: { type: 'string', description: 'Worker model override for the chosen provider.' },
         synth_provider: { type: 'string', description: 'Provider spec for the final synthesis (default: same as workers).' },

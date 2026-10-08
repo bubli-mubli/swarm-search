@@ -7,14 +7,18 @@ export const openrouterApi = {
   family: 'mixed',
   kind: 'api',
   label: 'OpenRouter',
-  defaultModel: process.env.SWARM_OPENROUTER_MODEL || 'anthropic/claude-haiku-4.5',
+  defaultModel: process.env.SWARM_OPENROUTER_MODEL || 'anthropic/claude-haiku-5.5',
+  // В режиме mixed OpenRouter даёт отдельное семейство (DeepSeek), а не второй Haiku — ошибки воркеров меньше совпадают.
+  mixedModel: process.env.SWARM_OPENROUTER_MIXED_MODEL || 'deepseek/deepseek-v4.1-flash',
   detect: () => Boolean(process.env.OPENROUTER_API_KEY),
 
   buildBody({ system, prompt, model, web }) {
     const messages = [];
     if (system) messages.push({ role: 'system', content: system });
     messages.push({ role: 'user', content: prompt });
-    return { model: web && !model.endsWith(':online') ? `${model}:online` : model, messages };
+    // Без max_tokens OpenRouter резервирует весь лимит модели (64k) и отказывает с 402 при небольшом балансе.
+    // usage.include — чтобы получить фактическую стоимость запроса.
+    return { model: web && !model.endsWith(':online') ? `${model}:online` : model, messages, max_tokens: 8000, usage: { include: true } };
   },
 
   async complete({ system, prompt, model = this.defaultModel, web = false, timeoutMs, signal }) {
@@ -31,7 +35,7 @@ export const openrouterApi = {
     });
     return {
       text: data.choices?.[0]?.message?.content ?? '',
-      usage: { inputTokens: data.usage?.prompt_tokens, outputTokens: data.usage?.completion_tokens },
+      usage: { inputTokens: data.usage?.prompt_tokens, outputTokens: data.usage?.completion_tokens, costUsd: data.usage?.cost },
     };
   },
 };

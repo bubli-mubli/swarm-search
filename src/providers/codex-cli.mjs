@@ -9,8 +9,8 @@ export const codexCli = {
   family: 'openai',
   kind: 'cli',
   label: 'OpenAI Codex CLI',
-  // Пусто = модель из ~/.codex/config.toml пользователя.
-  defaultModel: process.env.SWARM_CODEX_MODEL || '',
+  // Дешёвая модель, доступная по подписке ChatGPT; SWARM_CODEX_MODEL='' — модель из ~/.codex/config.toml.
+  defaultModel: process.env.SWARM_CODEX_MODEL ?? 'gpt-6-luna',
   detect: () => hasBinary('codex'),
 
   buildArgs({ model, web, outFile }) {

@@ -34,7 +34,7 @@ export async function resolveProviders(spec, { available } = {}) {
     const seen = new Set();
     const picked = avail.filter((p) => (seen.has(p.family) ? false : (seen.add(p.family), true)));
     if (!picked.length) throw new Error(noProvidersMessage());
-    return picked.map((provider) => ({ provider, model: undefined }));
+    return picked.map((provider) => ({ provider, model: provider.mixedModel }));
   }
 
   return raw.split(',').map((part) => {

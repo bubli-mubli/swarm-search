@@ -6,12 +6,12 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseAngles, fallbackAngles, runPool, swarmSearch, parseFollowups, resolveWorkers } from '../src/swarm.mjs';
+import { parseAngles, fallbackAngles, runPool, swarmSearch, parseFollowups, resolveWorkers, summarizeUsage, usageLine } from '../src/swarm.mjs';
 import { collectFiles, buildShards } from '../src/corpus.mjs';
 import { handleMessage, TOOLS, createSession, originAllowed } from '../src/mcp.mjs';
 import { resolveProviders } from '../src/providers/index.mjs';
 import { stripTomlBlock } from '../src/install.mjs';
-import { claudeCli } from '../src/providers/claude-cli.mjs';
+import { claudeCli, claudeUsage } from '../src/providers/claude-cli.mjs';
 import { codexCli } from '../src/providers/codex-cli.mjs';
 import { agyCli } from '../src/providers/agy-cli.mjs';
 import { anthropicApi } from '../src/providers/anthropic-api.mjs';
@@ -112,6 +112,30 @@ test('providers: build correct CLI args and API bodies', async () => {
 
   const o = openrouterApi.buildBody({ prompt: 'P', model: 'x/y', web: true });
   assert.equal(o.model, 'x/y:online');
+  assert.equal(o.max_tokens, 8000);
+  assert.ok(o.usage.include);
+
+  // Лёгкая обвязка claude-cli: без MCP, скиллов и user settings.
+  assert.ok(c.includes('--strict-mcp-config') && c.includes('--disable-slash-commands'));
+  assert.equal(c[c.indexOf('--setting-sources') + 1], '');
+  // agy в headless не должен молча отклонять read_url.
+  assert.ok(g.includes('--dangerously-skip-permissions') && g.includes('--sandbox'));
+});
+
+test('usage: claude-cli counts cached context, summary gives cost per useful answer', () => {
+  const u = claudeUsage({ usage: { input_tokens: 4, cache_creation_input_tokens: 3000, cache_read_input_tokens: 2000, output_tokens: 50 }, total_cost_usd: 0.02 });
+  assert.equal(u.inputTokens, 5004);
+  const sum = summarizeUsage([{ usage: u }, { usage: { inputTokens: 100, outputTokens: 10, costUsd: 0.01 } }, { usage: { inputTokens: 1, outputTokens: 1 } }, {}], 2);
+  assert.equal(sum.inputTokens, 5105);
+  assert.equal(sum.pricedCalls, 2);
+  assert.ok(Math.abs(sum.costUsd - 0.03) < 1e-9);
+  // Часть вызовов без цены — цену ответа не выдумываем.
+  assert.equal(sum.costPerUsefulUsd, null);
+  assert.match(usageLine(sum), /tokens 5\.1k in \/ 61 out · \$0\.030 \(2\/4 calls priced\)_?$/);
+  const full = summarizeUsage([{ usage: u }, { usage: { inputTokens: 100, outputTokens: 10, costUsd: 0.01 } }], 2);
+  assert.ok(Math.abs(full.costPerUsefulUsd - 0.015) < 1e-9);
+  assert.match(usageLine(full), /\$0\.030 · \$0\.015 per useful answer$/);
+  assert.equal(summarizeUsage([{ usage: { inputTokens: 1 } }], 1).costPerUsefulUsd, null);
 });
 
 test('resolveProviders parses specs and mixed picks one per family', async () => {
@@ -121,6 +145,9 @@ test('resolveProviders parses specs and mixed picks one per family', async () =>
   assert.deepEqual(mixed.map((s) => s.provider.id), ['claude-cli', 'codex-cli']);
   const auto = await resolveProviders('auto', { available });
   assert.equal(auto[0].provider.id, 'claude-cli');
+  // OpenRouter в mixed идёт своей моделью (другое семейство), а не дефолтной.
+  const withOr = await resolveProviders('mixed', { available: [...available, { id: 'openrouter', family: 'mixed', mixedModel: 'deepseek/x', detect: () => true }] });
+  assert.equal(withOr.at(-1).model, 'deepseek/x');
   const pinned = await resolveProviders('codex-cli:gpt-5-mini,agy-cli', { available });
   assert.equal(pinned[0].model, 'gpt-5-mini');
   assert.equal(pinned[1].provider.id, 'agy-cli');
@@ -150,6 +177,8 @@ test('swarmSearch runs plan → workers → synthesis with a fake provider', asy
     assert.match(markdown, /ANSWER built from/);
     assert.match(markdown, /angle one/);
     assert.match(markdown, /swarm-search · mode: web · workers: 2 \(fixed;/);
+    assert.match(markdown, /tokens \d+ in/);
+    assert.equal(report.usage.calls, 4);
     assert.equal(calls.filter((c) => c.startsWith('You are one worker')).length, 2);
   } finally {
     delete byId.fake;
@@ -342,4 +371,28 @@ test('stripTomlBlock removes only our block, keeps args with brackets elsewhere 
   assert.ok(out.includes('args = ["b", "c"]'));
   assert.ok(out.includes('[projects."/x"]\ntrust_level = "trusted"'));
   assert.equal(stripTomlBlock('a = 1\n'), 'a = 1\n');
+});
+
+test('synthesis asks for a worker-disagreements block instead of majority vote', async () => {
+  const seen = {};
+  const { byId } = await import('../src/providers/index.mjs');
+  byId.fake = {
+    id: 'fake', family: 'fake', defaultModel: 'm1', detect: () => true,
+    async complete({ system, prompt }) {
+      if (system.startsWith('You split')) return { text: '["a","b"]' };
+      if (system.startsWith('You are one worker')) return { text: '## Findings\n- x (https://x)' };
+      seen.system = system;
+      seen.prompt = prompt;
+      return { text: 'ok' };
+    },
+  };
+  try {
+    await swarmSearch({ query: 'q', provider: 'fake', workers: 2 });
+    assert.match(seen.system, /## Worker disagreements/);
+    assert.match(seen.system, /Do NOT settle a conflict by counting workers/);
+    // Синтезатор видит модель каждого воркера, чтобы указать её на каждой стороне спора.
+    assert.match(seen.prompt, /### Worker 1 \(fake:m1\)/);
+  } finally {
+    delete byId.fake;
+  }
 });

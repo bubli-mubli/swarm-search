@@ -19,7 +19,9 @@ export const agyCli = {
     // plan-режим держит сессию read-only, веб-поиск в нём доступен.
     // Промпт обязан быть приклеен к флагу (-p=...), иначе agy съест следующий флаг как промпт.
     const minutes = Math.max(1, Math.ceil(timeoutMs / 60_000));
-    return ['--mode', 'plan', '--model', model, '--output-format', 'json', '--print-timeout', `${minutes}m`, `-p=${prompt}`];
+    // В headless agy молча отклоняет read_url и возвращает пустой ответ; plan-режим и так read-only,
+    // поэтому разрешаем инструменты автоматически, а терминал держим в песочнице.
+    return ['--mode', 'plan', '--sandbox', '--dangerously-skip-permissions', '--model', model, '--output-format', 'json', '--print-timeout', `${minutes}m`, `-p=${prompt}`];
   },
 
   async complete({ system, prompt, model = this.defaultModel, timeoutMs = 180_000, signal }) {
@@ -46,6 +48,10 @@ export const agyCli = {
     }
     if (data.status && data.status !== 'SUCCESS') {
       throw new ProviderError(`agy-cli: ${data.error || data.status}`, { provider: this.id });
+    }
+    if (!String(data.response ?? '').trim() && data.denied_actions?.length) {
+      const denied = data.denied_actions.map((a) => a.action).join(', ');
+      throw new ProviderError(`agy-cli: empty answer, denied tools: ${denied}`, { provider: this.id });
     }
     return {
       text: String(data.response ?? ''),
