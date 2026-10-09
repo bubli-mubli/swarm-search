@@ -6,7 +6,7 @@ export const geminiCli = {
   family: 'google',
   kind: 'cli',
   label: 'Gemini CLI',
-  defaultModel: process.env.SWARM_GEMINI_MODEL || 'gemini-2.5-flash',
+  defaultModel: process.env.SWARM_GEMINI_MODEL || 'gemini-3.5-flash-lite',
   detect: () => hasBinary('gemini'),
 
   buildArgs({ model }) {

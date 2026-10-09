@@ -1,12 +1,12 @@
-// Anthropic Messages API напрямую (ANTHROPIC_API_KEY). Дефолт — Claude Haiku 4.5.
+// Anthropic Messages API напрямую (ANTHROPIC_API_KEY). Дефолт — Claude Haiku 5.5.
 import { postJson } from './base.mjs';
 
 export const anthropicApi = {
   id: 'anthropic',
   family: 'anthropic',
   kind: 'api',
-  label: 'Anthropic API (Claude Haiku 4.5)',
-  defaultModel: process.env.SWARM_ANTHROPIC_MODEL || 'claude-haiku-4-5',
+  label: 'Anthropic API (Claude Haiku 5.5)',
+  defaultModel: process.env.SWARM_ANTHROPIC_MODEL || 'claude-haiku-5-5',
   detect: () => Boolean(process.env.ANTHROPIC_API_KEY),
 
   buildBody({ system, prompt, model, web }) {
@@ -16,7 +16,7 @@ export const anthropicApi = {
       messages: [{ role: 'user', content: prompt }],
     };
     if (system) body.system = system;
-    // Базовый вариант web_search — единственный, который поддерживает Haiku 4.5.
+    // Базовый вариант web_search — его поддерживают и младшие модели Haiku.
     if (web) body.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }];
     return body;
   },

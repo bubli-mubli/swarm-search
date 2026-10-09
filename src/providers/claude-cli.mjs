@@ -1,6 +1,16 @@
 // Claude Code CLI (`claude -p`). Дефолт — Haiku, работает по подписке без API-ключа.
 import { hasBinary, runProcess, ProviderError } from './base.mjs';
 
+// input_tokens у CLI — только некэшированный хвост; реальный объём контекста лежит в cache_*.
+export function claudeUsage(data) {
+  const u = data.usage || {};
+  return {
+    inputTokens: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0),
+    outputTokens: u.output_tokens,
+    costUsd: data.total_cost_usd,
+  };
+}
+
 export const claudeCli = {
   id: 'claude-cli',
   family: 'anthropic',
@@ -12,6 +22,10 @@ export const claudeCli = {
   buildArgs({ model, web, system }) {
     const tools = web ? 'WebSearch,WebFetch' : '';
     const args = ['-p', '--model', model, '--output-format', 'json', '--no-session-persistence', '--tools', tools];
+    // Без этого каждый воркер тащит MCP-серверы, скиллы, плагины и CLAUDE.md пользователя:
+    // замер — ~30k токенов контекста на «pong» и 500–850k на веб-воркера против ~6k с флагами.
+    // SWARM_CLAUDE_LEAN=0 возвращает полную обвязку (например, если авторизация задана в user settings).
+    if (process.env.SWARM_CLAUDE_LEAN !== '0') args.push('--strict-mcp-config', '--disable-slash-commands', '--setting-sources', '');
     // Без allowedTools headless-режим просит разрешение на веб-поиск и не ищет.
     if (web) args.push('--allowedTools', tools);
     if (system) args.push('--system-prompt', system);
@@ -31,7 +45,7 @@ export const claudeCli = {
     if (data.is_error) throw new ProviderError(`claude-cli: ${data.result || 'unknown error'}`, { provider: this.id });
     return {
       text: String(data.result ?? ''),
-      usage: { inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens, costUsd: data.total_cost_usd },
+      usage: claudeUsage(data),
     };
   },
 };

@@ -6,7 +6,7 @@ export const openaiApi = {
   family: 'openai',
   kind: 'api',
   label: 'OpenAI API',
-  defaultModel: process.env.SWARM_OPENAI_MODEL || 'gpt-5-mini',
+  defaultModel: process.env.SWARM_OPENAI_MODEL || 'gpt-6-luna',
   detect: () => Boolean(process.env.OPENAI_API_KEY),
 
   buildBody({ system, prompt, model, web }) {

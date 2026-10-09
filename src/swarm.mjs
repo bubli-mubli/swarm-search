@@ -44,8 +44,14 @@ const CRITIQUE_SYSTEM =
 
 const SYNTH_SYSTEM =
   'You are the synthesizer of a research swarm. You receive the original question and reports from several workers. ' +
-  'Merge them into one answer for a busy expert. Rules: lead with the direct answer; then key findings as bullets, each with a [n] reference; ' +
-  'call out where workers disagree or were unsure; finish with a numbered "Sources" list mapping [n] to URLs or path:line. ' +
+  'Merge them into one answer for a busy expert. Rules: lead with the direct answer, and if it depends on a contested point, say that the point is contested instead of picking a side; ' +
+  'then key findings as bullets, each with a [n] reference; ' +
+  'then a section "## Worker disagreements" (heading in the language of the question): one bullet per conflict (different numbers, dates, versions, yes/no, ' +
+  'or one worker could not confirm what another asserts). In each bullet list every position separately: the position, which workers hold it ' +
+  '(Worker ids with their provider/model), and that side\'s own [n] sources. Do NOT settle a conflict by counting workers: workers on the same model ' +
+  'often share the same mistake and the minority is often right. Only weigh source quality (primary/official vs aggregator, date) and name the check that would settle it. ' +
+  'If there are no conflicts, write one line saying so. Also list claims backed by a single worker and a single source as unconfirmed. ' +
+  'Finish with a numbered "Sources" list mapping [n] to URLs or path:line. ' +
   'Number sources consecutively from [1]; every [n] used in the text MUST appear in the Sources list and vice versa. ' +
   'If round-2 reports are present, they were produced after seeing round 1: prefer them where they resolve a conflict and cite evidence. ' +
   'Drop duplicates, do not invent sources, keep the language of the original question.';
@@ -118,6 +124,35 @@ export async function runPool(tasks, concurrency, onDone, signal) {
   return results;
 }
 
+// Сводка расхода по всем вызовам прогона (план, воркеры, аудит, синтез) и цена одного полезного ответа воркера.
+export function summarizeUsage(calls, usefulAnswers) {
+  const sum = (key) => calls.reduce((acc, c) => acc + (Number(c.usage?.[key]) || 0), 0);
+  const priced = calls.filter((c) => typeof c.usage?.costUsd === 'number');
+  const costUsd = priced.length ? priced.reduce((acc, c) => acc + c.usage.costUsd, 0) : null;
+  return {
+    calls: calls.length,
+    pricedCalls: priced.length,
+    inputTokens: sum('inputTokens'),
+    outputTokens: sum('outputTokens'),
+    costUsd,
+    usefulAnswers,
+    // Цена ответа честна только если известна стоимость всех вызовов; иначе — null.
+    costPerUsefulUsd: costUsd !== null && priced.length === calls.length && usefulAnswers ? costUsd / usefulAnswers : null,
+  };
+}
+
+const fmtTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+const fmtUsd = (n) => `$${n < 0.01 ? n.toFixed(4) : n.toFixed(3)}`;
+
+export function usageLine(u) {
+  let line = `tokens ${fmtTokens(u.inputTokens)} in / ${fmtTokens(u.outputTokens)} out`;
+  if (u.costUsd !== null) {
+    line += ` · ${fmtUsd(u.costUsd)}${u.pricedCalls < u.calls ? ` (${u.pricedCalls}/${u.calls} calls priced)` : ''}`;
+    if (u.costPerUsefulUsd !== null) line += ` · ${fmtUsd(u.costPerUsefulUsd)} per useful answer`;
+  }
+  return line;
+}
+
 const isUseful = (r) => r.ok && r.text.trim() && !/^NOTHING RELEVANT\.?$/i.test(r.text.trim());
 
 /**
@@ -153,6 +188,8 @@ export async function swarmSearch(opts) {
   synth.model = opts.synthModel ?? synth.model ?? synth.provider.defaultModel;
 
   const languageHint = opts.language ? `\nAnswer language: ${opts.language}.` : '';
+  // Служебные вызовы (план, аудит, синтез) — для подсчёта расхода; воркеры считаются по своим отчётам.
+  const serviceCalls = [];
 
   // Запускает список заданий на воркерах и превращает результаты в отчёты.
   const runJobs = async (jobs, concurrency, stage) => {
@@ -232,6 +269,7 @@ export async function swarmSearch(opts) {
         })
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
+      serviceCalls.push(plan);
       angles = parseAngles(plan.text, cap) || fallbackAngles(query, fixedWorkers ?? 3);
     }
     concurrency = fixedWorkers ?? angles.length;
@@ -252,7 +290,7 @@ export async function swarmSearch(opts) {
     throw new Error(`All ${round1.length} workers returned nothing.${errors ? `\n${errors}` : ''}`);
   }
 
-  const reportBlock = (r, prefix = 'Worker') => `### ${prefix} ${r.id} (${r.provider}) — ${r.label}\n${r.text.trim()}`;
+  const reportBlock = (r, prefix = 'Worker') => `### ${prefix} ${r.id} (${r.provider}${r.model ? `:${r.model}` : ''}) — ${r.label}\n${r.text.trim()}`;
 
   // 3. Второй раунд (опционально): дозакрытие пробелов или критика.
   let round2 = [];
@@ -272,6 +310,7 @@ export async function swarmSearch(opts) {
         })
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
+      serviceCalls.push(audit);
       const followups = parseFollowups(audit.text, maxFollowups);
       if (!followups.length) {
         round2Note = 'gaps: none found';
@@ -329,13 +368,15 @@ export async function swarmSearch(opts) {
     (useful2.length ? `\n\n## Round 2 (${round2Mode === 'gaps' ? 'gap-filling follow-ups' : 'cross-critique'})\n\n${useful2.map((r) => reportBlock(r, round2Mode === 'gaps' ? 'Follow-up' : 'Critique')).join('\n\n')}` : '') +
     (failed.length ? `\n\nFailed workers: ${failed.map((r) => r.id).join(', ')} (mention that coverage is partial).` : '');
   const synthesis = await synth.provider.complete({ system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, model: synth.model, web: false, timeoutMs, signal });
+  serviceCalls.push(synthesis);
+  const usage = summarizeUsage([...serviceCalls, ...allReports], useful1.length + useful2.length);
 
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
   const familiesUsed = [...new Set(allReports.filter((r) => r.ok).map((r) => `${r.provider}${r.model ? `:${r.model}` : ''}`))];
   const footer =
     `\n\n---\n_swarm-search · mode: ${mode} · workers: ${round1.length} (${plannedBy}; ${useful1.length} useful, ${round1.filter((r) => !r.ok).length} failed)` +
     (rounds === 2 ? ` · round 2: ${round2Note}` : '') +
-    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synth.provider.id}:${synth.model} · ${elapsed}s_`;
+    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synth.provider.id}:${synth.model} · ${elapsed}s · ${usageLine(usage)}_`;
 
   return {
     markdown: synthesis.text.trim() + footer,
@@ -349,6 +390,7 @@ export async function swarmSearch(opts) {
       round2,
       synthesis: { provider: synth.provider.id, model: synth.model },
       elapsedSec: Number(elapsed),
+      usage,
     },
   };
 }

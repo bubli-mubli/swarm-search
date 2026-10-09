@@ -60,16 +60,25 @@ mode re-reads the shards that had findings with the follow-up questions.
 | provider id | what it uses | needs | default model |
 |---|---|---|---|
 | `claude-cli` | `claude -p` (Claude Code CLI) | Claude subscription, `claude` in PATH | `haiku` |
-| `codex-cli` | `codex exec` (OpenAI Codex CLI) | ChatGPT subscription, `codex` in PATH | your Codex default |
+| `codex-cli` | `codex exec` (OpenAI Codex CLI) | ChatGPT subscription, `codex` in PATH | `gpt-6-luna` (`SWARM_CODEX_MODEL=` = your Codex default) |
 | `agy-cli` | `agy -p` (Google Antigravity CLI) | Antigravity login, `agy` in PATH | `gemini-3.8-flash-low` |
-| `gemini-cli` | `gemini -p` (Gemini CLI) | Google login / `GEMINI_API_KEY` | `gemini-2.5-flash` |
-| `anthropic` | Messages API | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` |
-| `openai` | Responses API | `OPENAI_API_KEY` | `gpt-5-mini` |
-| `google` | Gemini API | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | `gemini-2.5-flash` |
-| `openrouter` | chat/completions | `OPENROUTER_API_KEY` | `anthropic/claude-haiku-4.5` |
+| `gemini-cli` | `gemini -p` (Gemini CLI) | Google login / `GEMINI_API_KEY` | `gemini-3.5-flash-lite` |
+| `anthropic` | Messages API | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
+| `openai` | Responses API | `OPENAI_API_KEY` | `gpt-6-luna` |
+| `google` | Gemini API | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | `gemini-3.5-flash-lite` |
+| `openrouter` | chat/completions | `OPENROUTER_API_KEY` | `anthropic/claude-haiku-5.5` |
 
 `swarm-search providers` shows which ones are usable on your machine. `auto` picks the first
 available in the order above; every default model can be overridden with `SWARM_<PROVIDER>_MODEL`.
+
+In `mixed` mode OpenRouter brings a separate model family, `deepseek/deepseek-v4.1-flash`
+(`SWARM_OPENROUTER_MIXED_MODEL`), instead of a second Haiku. A cheap DeepSeek worker by hand:
+`--provider openrouter:deepseek/deepseek-v4.1-flash`.
+
+`claude-cli` workers run without MCP servers, skills, plugins and your CLAUDE.md
+(`--strict-mcp-config --disable-slash-commands --setting-sources ''`), so one web worker uses about
+6k tokens of context instead of hundreds of thousands. `SWARM_CLAUDE_LEAN=0` restores the full harness.
+The answer footer shows tokens for all calls, cost (where the provider reports it) and the cost per useful worker answer.
 
 ## Install
 

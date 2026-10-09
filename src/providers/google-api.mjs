@@ -8,7 +8,7 @@ export const googleApi = {
   family: 'google',
   kind: 'api',
   label: 'Google Gemini API',
-  defaultModel: process.env.SWARM_GOOGLE_MODEL || 'gemini-2.5-flash',
+  defaultModel: process.env.SWARM_GOOGLE_MODEL || 'gemini-3.5-flash-lite',
   detect: () => Boolean(apiKey()),
 
   buildBody({ system, prompt, web }) {
