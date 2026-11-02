@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // CLI: swarm-search run|mcp|providers|install
 import { swarmSearch } from '../src/swarm.mjs';
-import { serveStdio, serveHttp } from '../src/mcp.mjs';
+import { serveStdio, serveHttp, parseRoots } from '../src/mcp.mjs';
 import { detectAvailable, PROVIDERS } from '../src/providers/index.mjs';
 import { planInstall, CLIENTS } from '../src/install.mjs';
 
@@ -10,20 +10,23 @@ const USAGE = `swarm-search — parallel LLM workers + one synthesizer
 Usage:
   swarm-search run "<question>" [--workers N|auto] [--rounds 1|2] [--round2 gaps|critique]
                                 [--provider P] [--model M] [--paths a,b] [--mode web|files]
-                                [--synth-provider P] [--synth-model M] [--language ru] [--json]
+                                [--synth-provider P] [--synth-model M] [--language ru] [--rank auto|on|off] [--json]
     workers: omit (auto) and the planner decides how many angles the question has (1-8);
     rounds 2: a second round after workers see round-1 results — "gaps" fills contradictions and
     unanswered parts with targeted follow-ups, "critique" makes every worker review the others.
+    rank (files mode): order files by relevance to the question before sharding; "auto" only when the
+    corpus exceeds SWARM_RANK_CHARS, then the least relevant files over that budget are dropped (counted in the footer).
   swarm-search mcp                      MCP server over stdio (Claude Code/Desktop, Codex, Antigravity, Gemini CLI)
-  swarm-search mcp --http [--port 8787] [--host 0.0.0.0] [--token SECRET]
-                                        MCP over Streamable HTTP (ChatGPT connectors, remote clients)
+  swarm-search mcp --http [--port 8787] [--host 0.0.0.0] [--token SECRET] [--files-roots dir1,dir2]
+                                        MCP over Streamable HTTP (ChatGPT connectors, remote clients);
+                                        files mode is off unless roots are given (or SWARM_FILES_ROOTS)
   swarm-search providers                Show which providers are usable on this machine
   swarm-search install <client> [--write]
                                         Print (or with --write apply) config for: ${CLIENTS.join(', ')}
 
 Providers: auto | mixed | ${PROVIDERS.map((p) => p.id).join(' | ')}   (add ":model" to pin a model)
 Env: SWARM_PROVIDER, SWARM_WORKERS (fixed default; unset = auto), SWARM_MAX_AUTO_WORKERS, SWARM_ROUNDS, SWARM_ROUND2,
-     SWARM_TIMEOUT_MS, SWARM_SHARD_CHARS, SWARM_HTTP_TOKEN, SWARM_HTTP_ALLOWED_ORIGINS,
+     SWARM_TIMEOUT_MS, SWARM_SHARD_CHARS, SWARM_RANK, SWARM_RANK_CHARS, SWARM_RETRY_BACKOFF_MS, SWARM_HTTP_TOKEN, SWARM_HTTP_ALLOWED_ORIGINS, SWARM_FILES_ROOTS,
      SWARM_CLAUDE_MODEL, SWARM_CODEX_MODEL, SWARM_AGY_MODEL, SWARM_GEMINI_MODEL,
      SWARM_ANTHROPIC_MODEL, SWARM_OPENAI_MODEL, SWARM_GOOGLE_MODEL, SWARM_OPENROUTER_MODEL,
      SWARM_OPENROUTER_MIXED_MODEL (OpenRouter model in mixed mode), SWARM_CLAUDE_LEAN=0 (full Claude Code context for workers)
@@ -57,6 +60,7 @@ async function main() {
           port: Number(flags.port) || Number(process.env.PORT) || 8787,
           host: flags.host || (flags.token || process.env.SWARM_HTTP_TOKEN ? '0.0.0.0' : '127.0.0.1'),
           token: flags.token || process.env.SWARM_HTTP_TOKEN,
+          filesRoots: parseRoots(typeof flags['files-roots'] === 'string' ? flags['files-roots'] : undefined),
         });
       } else serveStdio();
       return;
@@ -107,6 +111,7 @@ async function main() {
         language: flags.language,
         rounds: flags.rounds,
         round2: flags.round2,
+        rank: flags.rank,
         onProgress: (m) => process.stderr.write(`· ${m}\n`),
       });
       if (flags.json) console.log(JSON.stringify({ markdown, report }, null, 2));

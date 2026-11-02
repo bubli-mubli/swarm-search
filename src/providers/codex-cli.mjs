@@ -11,12 +11,15 @@ export const codexCli = {
   label: 'OpenAI Codex CLI',
   // Дешёвая модель, доступная по подписке ChatGPT; SWARM_CODEX_MODEL='' — модель из ~/.codex/config.toml.
   defaultModel: process.env.SWARM_CODEX_MODEL ?? 'gpt-6-luna',
+  // -s read-only разрешает shell-чтение любого файла на диске: удалённым клиентам MCP провайдер не даём.
+  localFiles: true,
   detect: () => hasBinary('codex'),
 
   buildArgs({ model, web, outFile }) {
     const args = ['exec', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '--color', 'never'];
     if (model) args.push('-m', model);
-    if (web) args.push('-c', 'web_search="live"');
+    // По умолчанию у codex веб-поиск из кэша включён, поэтому без веба выключаем его явно.
+    args.push('-c', web ? 'web_search="live"' : 'web_search="disabled"');
     args.push('-o', outFile);
     return args;
   },

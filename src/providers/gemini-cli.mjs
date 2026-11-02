@@ -1,5 +1,13 @@
 // Официальный Gemini CLI (`gemini -p`). Требует рабочий логин Google / GEMINI_API_KEY.
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { hasBinary, runProcess, ProviderError, mergeSystem } from './base.mjs';
+
+// Политика Gemini CLI, запрещающая сетевые инструменты (plan-режим их разрешает).
+export const NO_WEB_POLICY = ['google_web_search', 'web_fetch']
+  .map((tool) => `[[rule]]\ntoolName = "${tool}"\ndecision = "deny"\npriority = 999\n`)
+  .join('\n');
 
 export const geminiCli = {
   id: 'gemini-cli',
@@ -7,17 +15,33 @@ export const geminiCli = {
   kind: 'cli',
   label: 'Gemini CLI',
   defaultModel: process.env.SWARM_GEMINI_MODEL || 'gemini-3.5-flash-lite',
+  // plan-режим читает файлы рабочего каталога сервера: удалённым клиентам MCP провайдер не даём.
+  localFiles: true,
   detect: () => hasBinary('gemini'),
 
-  buildArgs({ model }) {
-    // plan = read-only, встроенный google_web_search остаётся доступен.
+  buildArgs({ model, policyFile }) {
+    // plan = read-only, встроенный google_web_search остаётся доступен; без веба его режет policyFile.
     // -p обязан получить значение (иначе съест -m); сам промпт приходит через stdin и дописывается к нему.
-    return ['-p', '', '-m', model, '-o', 'json', '--approval-mode', 'plan'];
+    const args = ['-p', '', '-m', model, '-o', 'json', '--approval-mode', 'plan'];
+    if (policyFile) args.push('--policy', policyFile);
+    return args;
   },
 
-  async complete({ system, prompt, model = this.defaultModel, timeoutMs, signal }) {
-    const args = this.buildArgs({ model });
-    const { stdout } = await runProcess('gemini', args, { input: mergeSystem(system, prompt), timeoutMs, signal });
+  async complete({ system, prompt, model = this.defaultModel, web = false, timeoutMs, signal }) {
+    let dir = null;
+    let policyFile;
+    if (!web) {
+      dir = await mkdtemp(join(tmpdir(), 'swarm-gemini-'));
+      policyFile = join(dir, 'no-web.toml');
+      await writeFile(policyFile, NO_WEB_POLICY);
+    }
+    let stdout;
+    try {
+      const args = this.buildArgs({ model, policyFile });
+      ({ stdout } = await runProcess('gemini', args, { input: mergeSystem(system, prompt), timeoutMs, signal }));
+    } finally {
+      if (dir) await rm(dir, { recursive: true, force: true });
+    }
     let data;
     try {
       data = JSON.parse(stdout.slice(stdout.indexOf('{')));

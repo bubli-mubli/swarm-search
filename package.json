@@ -18,12 +18,13 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20"
+    "node": "^22.23.4 || ^24.22.1 || >=26.12.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "mcp": "node bin/swarm-search.mjs mcp",
-    "smoke": "node bin/swarm-search.mjs providers"
+    "smoke": "node bin/swarm-search.mjs providers",
+    "bench": "node bench/bench.mjs"
   },
   "keywords": ["mcp", "claude-code", "plugin", "swarm", "research", "haiku", "gpt", "gemini"],
   "author": "jumpleGo",
