@@ -13,18 +13,25 @@ export const agyCli = {
   kind: 'cli',
   label: 'Antigravity CLI (Gemini Flash)',
   defaultModel: process.env.SWARM_AGY_MODEL || 'gemini-3.8-flash-low',
+  // search_web в agy считается безопасным и не выключается флагами — для files-шардов провайдер не берём.
+  webAlwaysOn: true,
+  // Инструменты чтения файлов в plan-режиме одобряются автоматически: удалённым клиентам MCP провайдер не даём.
+  localFiles: true,
   detect: () => hasBinary('agy'),
 
-  buildArgs({ model, timeoutMs, prompt }) {
+  buildArgs({ model, timeoutMs, prompt, web = true }) {
     // plan-режим держит сессию read-only, веб-поиск в нём доступен.
     // Промпт обязан быть приклеен к флагу (-p=...), иначе agy съест следующий флаг как промпт.
     const minutes = Math.max(1, Math.ceil(timeoutMs / 60_000));
     // В headless agy молча отклоняет read_url и возвращает пустой ответ; plan-режим и так read-only,
     // поэтому разрешаем инструменты автоматически, а терминал держим в песочнице.
-    return ['--mode', 'plan', '--sandbox', '--dangerously-skip-permissions', '--model', model, '--output-format', 'json', '--print-timeout', `${minutes}m`, `-p=${prompt}`];
+    // Без веба автоодобрение не включаем: read_url и прочие инструменты с разрешением в headless отклоняются.
+    const args = ['--mode', 'plan', '--sandbox'];
+    if (web) args.push('--dangerously-skip-permissions');
+    return [...args, '--model', model, '--output-format', 'json', '--print-timeout', `${minutes}m`, `-p=${prompt}`];
   },
 
-  async complete({ system, prompt, model = this.defaultModel, timeoutMs = 180_000, signal }) {
+  async complete({ system, prompt, model = this.defaultModel, web = false, timeoutMs = 180_000, signal }) {
     let full = mergeSystem(system, prompt);
     let dir = null;
     if (full.length > MAX_ARGV_PROMPT) {
@@ -35,7 +42,7 @@ export const agyCli = {
     }
     let stdout;
     try {
-      const args = this.buildArgs({ model, timeoutMs, prompt: full });
+      const args = this.buildArgs({ model, timeoutMs, prompt: full, web });
       ({ stdout } = await runProcess('agy', args, { timeoutMs: timeoutMs + 15_000, signal }));
     } finally {
       if (dir) await rm(dir, { recursive: true, force: true });

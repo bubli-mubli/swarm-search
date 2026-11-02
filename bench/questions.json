@@ -1,0 +1,17 @@
+[
+  { "id": "rust-1.0", "query": "In which year was Rust 1.0 released?", "facts": [{ "any": ["2015"] }] },
+  { "id": "postgres-port", "query": "What is the default TCP port of PostgreSQL?", "facts": [{ "any": ["5432"] }] },
+  { "id": "http-429", "query": "Which HTTP status code means \"Too Many Requests\", and which RFC introduced it?", "facts": [{ "any": ["429"] }, { "any": ["6585"] }] },
+  { "id": "nodejs-origin", "query": "Who created Node.js and in which year was it first released?", "facts": [{ "any": ["Ryan Dahl"] }, { "any": ["2009"] }] },
+  { "id": "sqlite-license", "query": "Under what license or legal status is the SQLite source code released?", "facts": [{ "any": ["public domain", "общественное достояние"] }] },
+  { "id": "ipv6-bits", "query": "How many bits long is an IPv6 address?", "facts": [{ "any": ["128"] }] },
+  { "id": "typescript-origin", "query": "Which company created TypeScript and in which year was it first made public?", "facts": [{ "any": ["Microsoft"] }, { "any": ["2012"] }] },
+  { "id": "json-rfc", "query": "Which IETF RFC number is the current JSON standard (STD 90)?", "facts": [{ "any": ["8259"] }] },
+  { "id": "python3", "query": "Who designed Python and in which year was Python 3.0 released?", "facts": [{ "any": ["Guido van Rossum"] }, { "any": ["2008"] }] },
+  { "id": "redis-port", "query": "What is the default port of a Redis server?", "facts": [{ "any": ["6379"] }] },
+  { "id": "mcp-origin", "query": "Which company introduced the Model Context Protocol (MCP) and in which year?", "facts": [{ "any": ["Anthropic"] }, { "any": ["2024"] }] },
+  { "id": "git-hash", "query": "Which hash function does Git use for object IDs in classic (non-SHA-256) repositories?", "facts": [{ "any": ["SHA-1", "SHA1"] }] },
+  { "id": "files-shard-env", "mode": "files", "paths": ["src"], "query": "Which environment variable sets the maximum number of characters per files-mode shard, and what is its default?", "facts": [{ "any": ["SWARM_SHARD_CHARS"] }, { "any": ["60000", "60_000", "60k", "60 000"] }] },
+  { "id": "files-http-port", "mode": "files", "paths": ["bin"], "query": "Which port does `swarm-search mcp --http` listen on by default?", "facts": [{ "any": ["8787"] }] },
+  { "id": "files-secrets", "mode": "files", "paths": ["src/corpus.mjs"], "query": "Which file names are treated as secrets and never sent to workers?", "facts": [{ "any": [".env"] }, { "any": ["pem"] }, { "any": ["service-account", "service account"] }] }
+]

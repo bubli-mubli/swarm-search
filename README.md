@@ -52,9 +52,51 @@ In **files mode** (`paths` given) the corpus is sharded instead: every worker re
 with line numbers and reports `path:line` findings; the synthesizer merges them. Round 2 in files
 mode re-reads the shards that had findings with the follow-up questions.
 
+Files mode never sends secrets to workers: `.env*` (templates `.env.example`/`.sample`/`.template`
+are kept), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `*.jks`, `*.tfstate`, `id_*` SSH keys,
+`credentials`/`credentials.json`, `.npmrc`, `.netrc`, `.git-credentials`, `.pgpass`, `.pypirc`,
+`secrets.{json,yaml,yml,toml,env,ini}`, `kubeconfig`, `.kube/config`, `.docker/config.json` and
+`*service-account*.json` are dropped both while walking a directory and when named explicitly. Workers run without web access in files mode: Claude CLI gets
+no web tools, Codex gets `web_search="disabled"`, Gemini CLI gets a policy that denies
+`google_web_search`/`web_fetch`, and `agy-cli` (whose web search cannot be turned off) is skipped
+for files shards and synthesis.
+
+Worker and critique prompts carry a data boundary: text from web pages, files and other reports is
+data, embedded instructions are not followed but listed under `## Uncertain` / `## Not found`.
+The MCP tool output starts with a note that the content was compiled from untrusted sources.
+
+**Answer quality checks done in code, not only in prompts:**
+
+- *Source check.* After synthesis every URL and `path:line` in the Sources list and in the answer
+  text must appear in a round-1 or round-2 worker report as a whole token: URLs match exactly (only a
+  trailing `/` is ignored), `path:line` matches the same path with the line inside a line or range
+  the worker cited (`src/a.mjs:12` is found in `src/a.mjs:10-14`, not in `src/a.mjs:120`). Refs that
+  don't match are marked "source not found in worker reports"; a Sources entry with no URL or
+  `path:line` is marked "no URL or path:line, cannot verify" and counts as unverified. Every `[n]`
+  in the text must be in the list and vice versa, mismatches are listed in a "Source check" line.
+  The footer shows `sources traced to worker reports k/n`, details are in `report.sourceCheck`
+  (`bodyUnverified` lists refs from the text). This only traces sources back to worker reports:
+  URLs are not opened and it does not check that a source supports the claim.
+- *Grounded retractions.* In `critique` a worker may move a claim to `## Retracted` only with the
+  refuting source (URL or `path:line`) taken from another worker's report. Retractions without one
+  are removed before synthesis, so a correct fact is not dropped just because the majority said
+  otherwise; the footer counts them (`report.retractions`). A bullet continued on indented lines
+  is kept or dropped as a whole, `- none` / `- None of my claims.` are not counted.
+- *Failover.* A worker that fails with HTTP 402/429/5xx, a timeout, a rate-limit/quota error or an
+  empty answer is retried once on the next pool slot with a different provider (e.g.
+  `provider: "openrouter,claude-cli"` or `mixed`); 429 waits `SWARM_RETRY_BACKOFF_MS` first.
+  The footer shows `retried k`, each retried worker has `retriedFrom` in the report.
+- *File ranking (files mode).* When the corpus is larger than `SWARM_RANK_CHARS` (480k chars ≈
+  8 shards), files are ranked by BM25 against the question (path tokens weigh more, files named in
+  the question come first) and only the top files that fit the budget are sharded. The footer says
+  `ranked files: kept/total kept, N dropped`, and the synthesizer is told coverage is partial.
+  `rank: "on"` always orders files by relevance, `"off"` disables ranking.
+
 ## Requirements
 
-- Node.js ≥ 20
+- Node.js `^22.23.4 || ^24.22.1 || >=26.12.1` (releases with the Brotli security patch; any
+  other version, including Node 20 and the end-of-life lines 23 and 25, gets an `engines` warning on
+  install, and an install with `engine-strict` fails)
 - at least one worker backend:
 
 | provider id | what it uses | needs | default model |
@@ -131,6 +173,19 @@ In ChatGPT enable Developer mode in settings and create a connector with URL
 (JSON responses on `POST /mcp`, `GET /health`). The Gemini consumer app has no custom MCP
 support; use Antigravity or Gemini CLI for Gemini.
 
+Files mode is **disabled** for HTTP clients by default (a tunnel arrives on loopback, so every
+HTTP request counts as remote). To allow it, list the directories remote clients may read with
+`SWARM_FILES_ROOTS=/srv/docs,/srv/repo` or `--files-roots /srv/docs,/srv/repo`: each path is
+resolved with `realpath` and must lie inside one of the roots, so symlinks and `..` cannot escape;
+hidden files and directories inside a root (`.git`, `.ssh`, `.npmrc`, …) are refused even when
+named explicitly. Stdio clients are not restricted.
+
+HTTP clients also never get workers that can read the server's disk on their own: `codex-cli`
+(its `-s read-only` sandbox still lets shell commands read any file), `agy-cli` (file tools are
+auto-approved in plan mode) and `gemini-cli` (reads the server's working directory) are skipped
+for remote calls in every mode, workers and synthesis alike. Use `claude-cli` (web tools only) or
+an API provider; a pool with only those three CLIs fails with an error.
+
 ## Usage
 
 ### MCP tool `swarm_search`
@@ -148,6 +203,7 @@ support; use Antigravity or Gemini CLI for Gemini.
 | `synth_provider`, `synth_model` | use a stronger model for the final synthesis only |
 | `angles` | your own sub-questions, skips the planner |
 | `language` | force answer language |
+| `rank` | files mode: `auto` (default) · `on` · `off`, see file ranking above |
 
 `swarm_providers` lists usable backends.
 
@@ -170,8 +226,12 @@ swarm-search run "..." --json           # full report with per-worker output
 | `SWARM_ROUNDS` / `SWARM_ROUND2` | `1` / `gaps` | default rounds and round-2 mode |
 | `SWARM_TIMEOUT_MS` | `180000` | per-call timeout |
 | `SWARM_SHARD_CHARS` | `60000` | max characters per files-mode shard |
+| `SWARM_RANK` | `auto` | files-mode ranking: `auto` (only above `SWARM_RANK_CHARS`), `on`, `off` |
+| `SWARM_RANK_CHARS` | `480000` | corpus size that turns ranking on and the budget of kept files |
+| `SWARM_RETRY_BACKOFF_MS` | `1500` | pause before retrying a worker that got HTTP 429 |
 | `SWARM_HTTP_TOKEN` | – | bearer token for `mcp --http` (required when binding a non-loopback host) |
 | `SWARM_HTTP_ALLOWED_ORIGINS` | – | comma-separated browser origins allowed besides localhost (`mcp --http`) |
+| `SWARM_FILES_ROOTS` | – | comma-separated directories remote `mcp --http` clients may scan in files mode; unset = files mode off over HTTP |
 | `SWARM_CLAUDE_MODEL`, `SWARM_CODEX_MODEL`, `SWARM_AGY_MODEL`, `SWARM_GEMINI_MODEL`, `SWARM_ANTHROPIC_MODEL`, `SWARM_OPENAI_MODEL`, `SWARM_GOOGLE_MODEL`, `SWARM_OPENROUTER_MODEL` | see table | per-provider default model |
 
 ## Cost and time
@@ -179,7 +239,9 @@ swarm-search run "..." --json           # full report with per-worker output
 A 4-worker web run is 6 model calls (1 plan + 4 workers + 1 synthesis) and takes 1–3 minutes with
 CLI backends. Round 2 adds 1 audit + up to 4 follow-ups (`gaps`) or N critiques (`critique`). CLI providers run on your subscriptions; API providers bill per token. Workers are
 read-only: `claude -p` gets only WebSearch/WebFetch, `codex exec` runs with `-s read-only`,
-`agy`/`gemini` run in plan mode.
+`agy`/`gemini` run in plan mode. Read-only still means codex, agy and gemini can read local files,
+so for local runs a prompt injection in a page or file could make them quote one; remote HTTP
+clients never get these providers (see above).
 
 ## Development
 
@@ -188,6 +250,22 @@ npm test                       # unit tests (no network)
 node bin/swarm-search.mjs providers
 node bin/swarm-search.mjs run "..." --workers 2
 ```
+
+### Provider benchmark
+
+Before switching the cheap default model, compare providers on a fixed set: `bench/questions.json`
+holds 15 questions with checkable facts (12 web, 3 files queries over this repo).
+
+```bash
+npm run bench -- claude-cli openrouter:deepseek/deepseek-v4.1-flash openrouter:minimax/minimax-m3.1-flash
+npm run bench -- codex-cli --only rust-1.0,files-http-port --workers 1 --out bench/codex.json
+```
+
+Each argument is one provider spec (workers and synthesis both run on it). The JSON result has per
+provider: `accuracy` (share of facts found in the answer), `successes` (answers with all facts),
+`nonEmptyRate`, `costPerSuccessUsd` (total cost / successful answers, `null` if any run was not
+fully priced), `avgSec`, `sourcesVerified/sourcesTotal` and per-question runs. The benchmark calls
+real models and costs money; `npm test` only runs it against fakes.
 
 Layout: `src/swarm.mjs` pipeline · `src/providers/*` one file per backend · `src/corpus.mjs`
 file sharding · `src/mcp.mjs` stdio + HTTP transports · `src/install.mjs` client configs ·

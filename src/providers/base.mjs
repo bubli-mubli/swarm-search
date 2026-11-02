@@ -18,10 +18,12 @@ export async function hasBinary(name) {
 }
 
 export class ProviderError extends Error {
-  constructor(message, { provider, cause, stderr } = {}) {
+  constructor(message, { provider, cause, stderr, status } = {}) {
     super(message);
     this.name = 'ProviderError';
     this.provider = provider;
+    // HTTP-статус ответа API: по нему рой решает, повторять ли задание на другом провайдере.
+    this.status = status;
     this.cause = cause;
     this.stderr = stderr;
   }
@@ -85,7 +87,7 @@ export async function postJson(url, { headers = {}, body, timeoutMs = 180_000, s
     });
     const text = await res.text();
     if (!res.ok) {
-      throw new ProviderError(`${provider}: HTTP ${res.status} ${text.slice(0, 500)}`, { provider });
+      throw new ProviderError(`${provider}: HTTP ${res.status} ${text.slice(0, 500)}`, { provider, status: res.status });
     }
     try {
       return JSON.parse(text);
