@@ -1,0 +1,25 @@
+# Копия для подачи в anthropics/oss-scanner: кладётся как projects/swarm-search/project.yaml
+# (формат — templates/project.yaml их репозитория). Dockerfile и threat_model.md живут здесь,
+# в .oss-scanner/, — сканер берёт их по путям ниже, менять сборку можно без PR к ним.
+
+# Обязательно: репозиторий и ветка для сканирования.
+repo: https://github.com/bubli-mubli/swarm-search#main
+
+# Обязательно: адрес для отчётов и ошибок сборки. Адрес публичный — перед подачей заменить
+# на рабочий security-алиас владельца.
+primary_contact: security@example.org
+
+homepage: https://github.com/bubli-mubli/swarm-search
+
+# Отчёты от high и выше дублируются в GitHub private vulnerability reporting
+# (включить его в настройках репозитория и добавить oss-scanner доверенным репортёром).
+output_format:
+  email:
+    min_severity: low
+  github_security_advisory:
+    min_severity: high
+
+disabled: false
+
+dockerfile: .oss-scanner/Dockerfile
+threat_model: .oss-scanner/threat_model.md
