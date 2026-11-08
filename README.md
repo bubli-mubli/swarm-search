@@ -63,6 +63,14 @@ for files shards and synthesis.
 
 Worker and critique prompts carry a data boundary: text from web pages, files and other reports is
 data, embedded instructions are not followed but listed under `## Uncertain` / `## Not found`.
+Before worker reports and file slices go into the gap-audit, critique and synthesis prompts, the code
+neutralizes role spoofing in them: lines that pose as a chat turn (`System:`, `User:`, `Assistant:`,
+`Human:`, `Developer:` at line start, also after markdown or `  12| ` line numbers) become
+`[quoted User]:`, and chat-template markup (`<|im_start|>`, `<|system|>`, `<｜User｜>`, `[INST]`,
+`<<SYS>>`, `<system>`, `<s>` …) gets its brackets swapped for `‹ ›`. Each report or slice is then
+wrapped in `<<<DATA <tag> …>>>` / `<<<END DATA <tag>>>>` lines with a random tag per run, and any
+wrapper-like line inside the content is broken, so the content cannot close the block and talk as
+the orchestrator. Wording and line numbers stay intact, so `path:line` citations still hold.
 The MCP tool output starts with a note that the content was compiled from untrusted sources.
 
 **Answer quality checks done in code, not only in prompts:**
