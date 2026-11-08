@@ -5,9 +5,8 @@
 # Обязательно: репозиторий и ветка для сканирования.
 repo: https://github.com/bubli-mubli/swarm-search#main
 
-# Обязательно: адрес для отчётов и ошибок сборки. Адрес публичный — перед подачей заменить
-# на рабочий security-алиас владельца.
-primary_contact: security@example.org
+# Обязательно: адрес для отчётов и ошибок сборки (публичный).
+primary_contact: rrotatew@gmail.com
 
 homepage: https://github.com/bubli-mubli/swarm-search
 
