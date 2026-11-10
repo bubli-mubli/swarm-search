@@ -1,7 +1,7 @@
 ---
 name: swarm-search
 description: Run a parallel swarm search (N cheap workers + synthesis) on a question or over local files
-argument-hint: <question> [--files path1,path2] [--workers N] [--rounds 2] [--round2 gaps|critique] [--provider auto|mixed|claude-cli|codex-cli|agy-cli|...]
+argument-hint: <question> [--files path1,path2] [--workers N] [--rounds 2] [--round2 gaps|critique] [--provider auto|mixed|arcodex-cli|arclaude-cli|claude-cli|codex-cli|agy-cli|...]
 ---
 
 Run a swarm search for: $ARGUMENTS

@@ -1,6 +1,6 @@
 ---
 name: swarm-search
-description: Use when a question needs broad, multi-angle research (state of the art, comparisons, "what do people say about X", market/price/version checks) or when something must be found across a large set of files — and it is worth spending a few minutes to get a sourced, cross-checked summary. Runs the `swarm_search` MCP tool: several cheap workers (Claude Haiku by default; GPT / Gemini optional) search in parallel, one synthesizer merges results. Do not use for single-fact lookups or questions answerable from the current context.
+description: Use when a question needs broad, multi-angle research (state of the art, comparisons, "what do people say about X", market/price/version checks) or when something must be found across a large set of files — and it is worth spending a few minutes to get a sourced, cross-checked summary. Runs the `swarm_search` MCP tool: several cheap workers (AgentRouter by default when available; Claude / GPT / Gemini supported) search in parallel, one synthesizer merges results. Do not use for single-fact lookups or questions answerable from the current context.
 ---
 
 # Swarm search
@@ -36,7 +36,7 @@ Minimal: `swarm_search({ query })`. Useful options:
 | `workers` | omit → auto: the planner decides how many independent angles the question has (1–8). Pass a number only when the user asked for one |
 | `rounds` | `1` (default) or `2`. Use 2 when the question is contested, the answer depends on conflicting sources, or `provider` is `mixed` |
 | `round2` | `gaps` (default, cheap: auditor + a few follow-up workers) or `critique` (every worker reviews the others; N extra calls) |
-| `provider` | `auto` (first available), `mixed` (one per model family), or an id like `claude-cli`, `codex-cli`, `agy-cli`, `anthropic`, `openai`, `google`, `openrouter`; `id:model` pins a model |
+| `provider` | `auto` (first compatible; AgentRouter → agy → Claude), `mixed` (one per model family), or an id like `arcodex-cli`, `arclaude-cli`, `claude-cli`, `codex-cli`, `agy-cli`, `anthropic`, `openai`, `google`, `openrouter`; `id:model` pins a model |
 | `synth_provider` / `synth_model` | stronger model for the final synthesis only |
 | `angles` | your own sub-questions, skips the planner |
 | `language` | force answer language |
