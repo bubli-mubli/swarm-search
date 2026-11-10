@@ -79,7 +79,7 @@ for (const [body,kind,bin] of [
   if (findings) {
     deep([r.workers.map(w=>[w.provider,w.ok,w.retriedFrom]),[['agy-cli',true,cx.id],['agy-cli',true,cx.id]]]);
     eq([r.retried,2],[r.synthesis.provider,ag.id],[used.filter(([s])=>s === 'w').length,2]);
-    match(markdown,/synthesis:agy-cli:/);
+    match(markdown,/synthesis: agy-cli:/);
     ok(msgs.some(m=>/arcodex-cli failed.*AgentRouter.*retrying on agy-cli/.test(m)));
   } else {
     checkFallback(r,kind === 'chain' ? cd.id :ag.id,bin + '-cli');
@@ -91,7 +91,7 @@ for (let [kind,opts,prefix,text] of [
   ['files',{workers:1,rank:'off',query:'port?'}],
   ['healthy',{angles:['a','b','c']}],
   ['planner',{workers:2},'You split','["angle one", "angle two"]'],
-  ['gaps',{angles:['a'],rounds:2,round2:'gaps',model:'w-mod',synthModel:'s-mod'},'You audit','{"followups":["verify"]'],
+  ['gaps',{angles:['a'],rounds:2,round2:'gaps',model:'w-mod',synthModel:'s-mod'},'You audit','{"followups":["verify"]}'],
 ]) test(`auto ${kind}`,async t=>{
   mockAvail(t); const calls = [],gaps = kind === 'gaps';
   if (kind === 'files') {
@@ -140,5 +140,5 @@ test('MCP names, args and output',async t=>{
   deep([TOOLS.map(t=>t.name),['swarm_search','swarm_providers']]);
   match(TOOLS[0].inputSchema.properties.provider.description,/arcodex-cli.*arclaude-cli/);
   const res = await callTool('swarm_search',{query:'q',angles:['a'],provider:'arclaude-cli:sonnet',synth_provider:'arclaude-cli:haiku'});
-  eq([res.content[0].type,'text']); ok(res.content[0].text.startsWith(UNTRUSTED_NOTE)); match(res.content[0].text,/synthesis:arclaude-cli:haiku/);
+  eq([res.content[0].type,'text']); ok(res.content[0].text.startsWith(UNTRUSTED_NOTE)); match(res.content[0].text,/synthesis: arclaude-cli:haiku/);
 });

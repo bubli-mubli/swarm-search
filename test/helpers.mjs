@@ -8,7 +8,7 @@ import {DEFAULTS,swarmSearch as ss,isRetryable} from '../src/swarm.mjs';
 import {ProviderError,runProcess} from '../src/providers/base.mjs';
 
 export const [cx,cl,ag,cd,gm] = ['arcodex-cli','arclaude-cli','agy-cli','claude-cli','gemini-cli'].map(id=>byId[id]);
-export const chain = [cx.id,ag.id,cd.id];
+export const chain = ['arcodex-cli','agy-cli','claude-cli'];
 export const okAns = (text = 'Ans (https://example.org)')=>({text});
 export const waf = '<!doctype html><html><body>Cloudflare captcha challenge</body></html>';
 export const ids = s=>s.map(x=>x.provider.id);

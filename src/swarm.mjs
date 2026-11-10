@@ -398,7 +398,7 @@ export async function swarmSearch(opts) {
   const mode = opts.mode && opts.mode !== 'auto' ? opts.mode : paths.length ? 'files' : 'web';
   const progress = (msg) => opts.onProgress?.(msg);
 
-  // Validate permitted paths before provider selection.
+  // Validate paths before selecting a provider.
   const collectedFiles = mode === 'files' && opts.filesRoots ? await collectFiles(paths, { roots: opts.filesRoots }) : null;
   const automatic = ['', 'auto'].includes((opts.provider || process.env.SWARM_PROVIDER || 'auto').trim());
   const pool = await resolveProviders(opts.provider, { mode, remote: opts.remote, includeFallbacks: automatic });
@@ -418,7 +418,7 @@ export async function swarmSearch(opts) {
     if (sandboxed.length < slots.length) progress(`remote client: skipping ${slots.filter((s) => s.provider.localFiles).map((s) => s.provider.id).join(', ')} (can read the server's disk)`);
     slots = sandboxed;
   }
-  // Auto uses the first provider; other slots are fallbacks.
+  // Auto: first provider, then fallbacks.
   const pick = (i) => slots[automatic ? 0 : i % slots.length];
 
   const synthAutomatic = opts.synthProvider ? ['', 'auto'].includes(opts.synthProvider.trim()) : automatic;
@@ -441,14 +441,14 @@ export async function swarmSearch(opts) {
   const serviceCalls = [];
   let retried = 0;
 
-  const fallback = async (candidates,request,onRetry)=>{
+  const fallback = async (candidates, request, onRetry) => {
     for (let i = 0; i < candidates.length; i++) {
       throwIfCancelled();
       const slot = candidates[i];
-      let response,error;
+      let response, error;
       try {
-        const res = await slot.provider.complete({...request,model:slot.model,timeoutMs,signal });
-        response = {...res,provider:slot.provider.id,model:slot.model,...(i ? {retriedFrom:candidates[0].provider.id } :{}) };
+        const res = await slot.provider.complete({ ...request, model: slot.model, timeoutMs, signal });
+        response = { ...res, provider: slot.provider.id, model: slot.model, ...(i ? { retriedFrom: candidates[0].provider.id } : {}) };
         if (res.text?.trim()) return response;
         error = new Error('empty response');
       } catch (err) {
@@ -460,59 +460,37 @@ export async function swarmSearch(opts) {
         throw error;
       }
       if (error.status === 429 || /\b429\b|rate.?limit|too many requests/i.test(`${error.message || ''} ${error.stderr || ''}`)) {
-        await new Promise((r)=>setTimeout(r,DEFAULTS.retryBackoffMs));
+        await new Promise((r) => setTimeout(r, DEFAULTS.retryBackoffMs));
       }
       throwIfCancelled();
-      onRetry?.(slot,candidates[i + 1],error);
+      onRetry?.(slot, candidates[i + 1], error);
     }
   };
-  const retryProgress = (label)=>(slot,next,error)=>
+  const retryProgress = (label) => (slot, next, error) =>
     progress(`${label}: ${slot.provider.id} failed (${error.message.slice(0, 80)}), retrying on ${next.provider.id}`);
-  const service = (candidates,label)=>({complete:(request)=>fallback(candidates,request,retryProgress(label)) });
-  const planner = service(automatic ? slots :slots.slice(0,1),'planning');
-  const auditor = service(synthCandidates,'round 2 audit');
+  const service = (candidates, label) => ({ complete: (request) => fallback(candidates, request, retryProgress(label)) });
+  const planner = service(automatic ? slots : slots.slice(0, 1), 'planning');
+  const auditor = service(synthCandidates, 'round 2 audit');
   synth.provider = {
     ...synth.provider,
     async complete(request) {
-      const res = await service(synthCandidates,'synthesis').complete(request);
-      Object.assign(synth,synthCandidates.find((s)=>s.provider.id === res.provider));
+      const res = await service(synthCandidates, 'synthesis').complete(request);
+      Object.assign(synth, synthCandidates.find((s) => s.provider.id === res.provider));
       return res;
     },
   };
 
   // Запускает список заданий на воркерах и превращает результаты в отчёты.
   const runJobs = async (jobs, concurrency, stage) => {
-    const call = async (slot, job) => {
-      throwIfCancelled();
-      const res = await slot.provider.complete({ system: job.system, prompt: job.prompt, model: slot.model, web: job.web, timeoutMs, signal });
-      return { ...res, provider: slot.provider.id, model: slot.model };
-    };
     const tasks = jobs.map((job, i) => async () => {
       const slot = pick(i);
-      let first;
-      try {
-        const res = await call(slot, job);
-        if (res.text?.trim()) return res;
-        first = { res, error: new Error('empty response') };
-      } catch (err) {
-        if (signal?.aborted || !isRetryable(err)) throw err;
-        first = { error: err };
-      }
-      // Фейловер: один повтор на следующем слоте пула с другим провайдером.
+      // Explicit: one retry; auto: full chain.
       const alt = slots.map((_, k) => slots[(i + 1 + k) % slots.length]).find((s) => s.provider.id !== slot.provider.id);
-      if (!alt) {
-        if (first.res) return first.res;
-        throw first.error;
-      }
-      if (first.error?.status === 429 || /\b429\b|rate.?limit|too many requests/i.test(`${first.error?.message || ''} ${first.error?.stderr || ''}`)) {
-        await new Promise((r) => setTimeout(r, DEFAULTS.retryBackoffMs));
-      }
-      throwIfCancelled();
-      retried += 1;
-      progress(`${stage} worker ${i + 1}: ${slot.provider.id} failed (${first.error.message.slice(0, 80)}), retrying on ${alt.provider.id}`);
-      const candidates = automatic ? slots.slice(1) : [alt];
-      const res = await fallback(candidates, { system: job.system, prompt: job.prompt, web: job.web }, retryProgress(`${stage} worker ${i + 1}`));
-      return { ...res, retriedFrom: slot.provider.id };
+      const candidates = automatic ? slots : [slot, ...(alt ? [alt] : [])];
+      return fallback(candidates, { system: job.system, prompt: job.prompt, web: job.web }, (failed, next, error) => {
+        if (failed === slot) retried += 1;
+        retryProgress(`${stage} worker ${i + 1}`)(failed, next, error);
+      });
     });
     let done = 0;
     const results = await runPool(

@@ -3,13 +3,13 @@ import {test,assert,ok,match,rejects,ss,PROVIDERS,rp,tmp,mockAvail,ids,writeServ
 test('selection: auto/mixed/files/remote',async ()=>{
   const av = [cx,cl,ag,cd],files = {mode:'files'},remote = {...files,remote:true};
   for (const [spec,available,opts,want] of [
-    ['auto',[ag,gm],files,[{provider:gm,model:undefined}]],
+    ['auto',[ag,gm,cd],files,[{provider:gm,model:undefined}]],
     ['auto',av,{includeFallbacks:true},[cx.id,ag.id,cd.id]],
     ['mixed',av,{},[cx.id,cl.id,ag.id]],
     ['mixed',[ag,gm,cd],files,[gm.id,cd.id]],
     ['auto',[cx,ag,cd],remote,[cd.id]],
     ['auto',av,{},cx.id],['arclaude-cli:haiku',av,{},cl],
-    ['auto',[cl],files,cl.id],['auto',[ag,gm,cd],files,gm],['auto',av,remote,cl.id],
+    ['auto',[cl],files,cl.id],['auto',av,remote,cl.id],
   ]) {
     const slots = await rp(spec,{available,...opts});
     if (Array.isArray(want)) deep([typeof want[0] === 'string' ? ids(slots) :slots,want]);
