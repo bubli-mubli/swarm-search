@@ -9,7 +9,7 @@ import { googleApi } from './google-api.mjs';
 import { openrouterApi } from './openrouter-api.mjs';
 import { arcodexCli, arclaudeCli } from './agentrouter-cli.mjs';
 
-// Порядок = приоритет: AgentRouter → agy → Claude → legacy CLI → платные API.
+// Priority: AgentRouter → agy → Claude → legacy CLI → API.
 export const PROVIDERS = [arcodexCli, arclaudeCli, agyCli, claudeCli, codexCli, geminiCli, anthropicApi, openaiApi, googleApi, openrouterApi];
 
 export const byId = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
@@ -24,21 +24,20 @@ export async function detectAvailable() {
 export async function resolveProviders(spec, { available, mode, remote = false, includeFallbacks = false } = {}) {
   const avail = available ?? (await detectAvailable());
   const raw = (spec || process.env.SWARM_PROVIDER || 'auto').trim();
-  // Фильтруем до выбора первого провайдера и до дедупликации семейств в mixed.
+  // Filter before auto selection and mixed family deduplication.
   const compatible = avail.filter((p) => (mode !== 'files' || !p.webAlwaysOn) && (!remote || !p.localFiles));
   const requireCompatible = () => {
     if (compatible.length) return;
     if (!avail.length) throw new Error(noProvidersMessage());
     if (mode === 'files' && avail.every((p) => p.webAlwaysOn)) {
-      throw new Error(`files mode: ${avail.map((p) => p.id).join(', ')} cannot run without web access; install arcodex / arclaude, or choose --provider claude-cli, codex-cli, gemini-cli or an API provider. Run swarm-search providers to check availability.`);
+      throw new Error(`files mode: ${avail.map((p) => p.id).join(', ')} cannot run without web access; install arcodex / arclaude or choose --provider claude-cli, codex-cli or gemini-cli.`);
     }
     throw new Error(`remote clients: ${avail.map((p) => p.id).join(', ')} cannot run with the required restrictions; use --provider arclaude-cli, claude-cli or an API provider`);
   };
 
   if (raw === 'auto' || raw === '') {
     requireCompatible();
-    // В auto выбираем одну обёртку AgentRouter: arcodex, иначе arclaude.
-    // При сбое общего маршрутизатора следующий провайдер — agy, затем Claude.
+    // Pick arcodex or arclaude; router failures fall back to agy, then Claude.
     const hasArcodex = compatible.some((p) => p.id === arcodexCli.id);
     const automatic = compatible.filter((p) => !hasArcodex || p.id !== arclaudeCli.id);
     return (includeFallbacks ? automatic : automatic.slice(0, 1)).map((provider) => ({ provider, model: undefined }));

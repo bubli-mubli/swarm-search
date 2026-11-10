@@ -1,93 +1,73 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { swarmSearch as ss } from '../src/swarm.mjs';
-import { PROVIDERS, byId, resolveProviders as rp } from '../src/providers/index.mjs';
-import { agyCli as ag, geminiCli as gm, claudeCli as cd } from '../src/providers/index.mjs';
-import { tmp, mockAvail, ids, writeServer } from './helpers.mjs';
+import {test,assert,ok,match,rejects,ss,PROVIDERS,rp,tmp,mockAvail,ids,writeServer,cx,cl,ag,cd,gm,chain,eq,deep,mockFail} from './helpers.mjs';
 
-const [CX, CL, AG, CD, GM] = ['arcodex-cli', 'arclaude-cli', 'agy-cli', 'claude-cli', 'gemini-cli'];
-const [cx, cl] = [byId[CX], byId[CL]];
-
-test('files mode auto filters agy before selecting and keeps legacy single-slot', async () => {
-  assert.deepEqual(await rp('auto', { available: [ag, gm], mode: 'files' }), [{ provider: gm, model: undefined }]);
+test('selection: auto/mixed/files/remote',async ()=>{
+  const av = [cx,cl,ag,cd],files = {mode:'files'},remote = {...files,remote:true};
+  for (const [spec,available,opts,want] of [
+    ['auto',[ag,gm],files,[{provider:gm,model:undefined}]],
+    ['auto',av,{includeFallbacks:true},[cx.id,ag.id,cd.id]],
+    ['mixed',av,{},[cx.id,cl.id,ag.id]],
+    ['mixed',[ag,gm,cd],files,[gm.id,cd.id]],
+    ['auto',[cx,ag,cd],remote,[cd.id]],
+    ['auto',av,{},cx.id],['arclaude-cli:haiku',av,{},cl],
+    ['auto',[cl],files,cl.id],['auto',[ag,gm,cd],files,gm],['auto',av,remote,cl.id],
+  ]) {
+    const slots = await rp(spec,{available,...opts});
+    if (Array.isArray(want)) deep([typeof want[0] === 'string' ? ids(slots) :slots,want]);
+    else eq([typeof want === 'string' ? slots[0].provider.id :slots[0].provider,want]);
+  }
 });
 
-test('files mode auto selects offline provider over agy-cli', async (t) => {
-  const dir = await tmp(t, 'f-'); mockAvail(t, [AG, GM]);
-  const a = t.mock.method(ag, 'complete', async () => assert.fail());
-  const o = t.mock.method(gm, 'complete', async ({ web, system, prompt }) => {
-    assert.equal(web, false); if (system.startsWith('You are one worker')) assert.match(prompt, /port = 8787/);
-    return { text: 'Port 8787 (s.mjs:1)' };
+test('priority without arcodex',async t=>{
+  const order = [...chain.slice(0,1),cl.id,...chain.slice(1),'codex-cli',gm.id,'anthropic'],en = mockAvail(t,order);
+  deep([ids(await rp('auto',{includeFallbacks:true})),order.filter(id=>id !== cl.id)]);
+  for (const id of order) {eq([(await rp('auto'))[0].provider.id,id]); en.delete(id);}
+  ok(PROVIDERS.slice(PROVIDERS.findIndex(p=>p.kind === 'api')).every(p=>p.kind === 'api'));
+  for (const id of [cl.id,ag.id,cd.id,'anthropic']) en.add(id);
+  deep([ids(await rp('auto',{includeFallbacks:true})),[cl.id,ag.id,cd.id,'anthropic']]);
+});
+
+test('legacy specs and models',async ()=>deep([
+  (await rp('arcodex-cli:gpt-custom,arclaude-cli:sonnet,agy-cli,claude-cli:haiku,codex-cli')).map(s=>[s.provider.id,s.model]),
+  [[cx.id,'gpt-custom'],[cl.id,'sonnet'],[ag.id,undefined],[cd.id,'haiku'],['codex-cli',undefined]],
+]));
+
+for (const [name,available,provider,opts] of [
+  ['files offline over agy',[ag.id,gm.id],gm,{mode:'files'}],
+  ['files router and auto synthesis',chain,cx,{provider:'auto',synthProvider:'auto'}],
+]) test(name,async t=>{
+  const dir = await tmp(t),calls = []; mockAvail(t,available);
+  const bad = t.mock.method(ag,'complete',()=>assert.fail());
+  if (provider === cx) mockFail(t,cd);
+  const good = t.mock.method(provider,'complete',async ({web,system,prompt})=>{
+    eq([web,false]); calls.push(prompt);
+    if (provider === gm && system.startsWith('You are one worker')) match(prompt,/port = 8787/);
+    return {text:'Port 8787 (s.mjs:1)'};
   });
   await writeServer(dir);
-  const { report: r } = await ss({ query: 'port?', mode: 'files', paths: [dir], workers: 1, rank: 'off' });
-  assert.equal(r.workers[0].provider, GM); assert.equal(r.synthesis.provider, GM);
-  assert.equal(a.mock.callCount(), 0); assert.equal(o.mock.callCount(), 2);
+  const {report:r,markdown} = await ss({query:'port?',paths:[dir],workers:1,rank:'off',...opts});
+  eq([r.workers[0].provider,provider.id],[r.synthesis.provider,provider.id]);
+  if (provider === gm) eq([bad.mock.callCount(),0],[good.mock.callCount(),2]);
+  else {match(markdown,/mode: files/); eq([calls.length,2]);}
 });
 
-test('auto uses arclaude when arcodex unavailable before agy, Claude, API keys', async (t) => {
-  mockAvail(t, [CL, AG, CD, 'anthropic']);
-  assert.deepEqual(ids(await rp('auto', { includeFallbacks: true })), [CL, AG, CD, 'anthropic']);
+test('actionable errors',async ()=>{
+  const files = {query:'q',paths:['src'],mode:'files'};
+  for (const [run,error] of [
+    [()=>rp('auto',{available:[ag],mode:'files'}),/files mode:.*arcodex.*arclaude.*--provider/s],
+    [()=>ss({...files,provider:ag.id}),/cannot run without web access.*--provider/s],
+    [()=>ss({...files,provider:cd.id,synthProvider:ag.id}),/synthesis on agy-cli.*--synth-provider auto/s],
+    [()=>ss({query:'q',provider:cx.id,remote:true,angles:['a']}),/can read the server's disk/],
+  ]) await rejects(run(),error);
 });
 
-test('auto prefers AgentRouter, then agy-cli, then claude-cli before API keys', async (t) => {
-  const order = [CX, CL, AG, CD, 'codex-cli', GM, 'anthropic'], en = mockAvail(t, order);
-  assert.deepEqual(ids(await rp('auto', { includeFallbacks: true })), order.filter(id => id !== CL));
-  for (const exp of order) { assert.equal((await rp('auto'))[0].provider.id, exp); en.delete(exp); }
-  assert.ok(PROVIDERS.slice(PROVIDERS.findIndex(p => p.kind === 'api')).every(p => p.kind === 'api'));
+test('remote disk capabilities',()=>{ok(cx.localFiles); ok(!cl.localFiles); });
+test('SWARM_PROVIDER explicit; auto overrides it',async t=>{
+  mockAvail(t,[cx.id,ag.id]); process.env.SWARM_PROVIDER = ag.id;
+  eq([(await rp())[0].provider,ag],[(await rp('auto',{mode:'files' }))[0].provider.id,cx.id]);
+  await rejects(ss({query:'q',paths:['src'] }),/cannot run without web access/);
 });
-
-test('AgentRouter wrappers explicit selection and mixed per family', async () => {
-  const av = [cx, cl, ag, cd];
-  assert.equal((await rp('auto', { available: av }))[0].provider.id, CX);
-  assert.deepEqual(ids(await rp('auto', { available: av, includeFallbacks: true })), [CX, AG, CD]);
-  assert.deepEqual(ids(await rp('mixed', { available: av })), [CX, CL, AG]);
-  assert.equal((await rp('arclaude-cli:haiku', { available: av }))[0].provider, cl);
-  assert.equal((await rp('auto', { available: [cl], mode: 'files' }))[0].provider.id, CL);
-});
-
-test('provider specs keep legacy ids, comma lists and model overrides', async () => {
-  assert.deepEqual((await rp('arcodex-cli:gpt-custom,arclaude-cli:sonnet,agy-cli,claude-cli:haiku,codex-cli')).map(s => [s.provider.id, s.model]),
-    [[CX, 'gpt-custom'], [CL, 'sonnet'], [AG, undefined], [CD, 'haiku'], ['codex-cli', undefined]]);
-});
-
-test('files mode filters before auto selection and mixed family selection', async () => {
-  const av = [ag, gm, cd];
-  assert.equal((await rp('auto', { available: av, mode: 'files' }))[0].provider, gm);
-  assert.deepEqual(ids(await rp('mixed', { available: av, mode: 'files' })), [GM, CD]);
-});
-
-test('files mode auto prefers AgentRouter for workers and automatic synthesizer', async (t) => {
-  const dir = await tmp(t, 'rf-'), calls = []; mockAvail(t, [CX, AG, CD]);
-  t.mock.method(cx, 'complete', async ({ web, prompt }) => { assert.equal(web, false); calls.push(prompt); return { text: 'Port 8787 (s.mjs:1)' }; });
-  t.mock.method(ag, 'complete', () => assert.fail()); t.mock.method(cd, 'complete', () => assert.fail());
-  await writeServer(dir);
-  const { report: r, markdown: m } = await ss({ query: 'port?', paths: [dir], provider: 'auto', synthProvider: 'auto', workers: 1, rank: 'off' });
-  assert.equal(r.workers[0].provider, CX); assert.equal(r.synthesis.provider, CX); assert.match(m, /mode: files/); assert.equal(calls.length, 2);
-});
-
-test('files mode without compatible provider gives actionable error', async () => {
-  await assert.rejects(rp('auto', { available: [ag], mode: 'files' }), /files mode:.*arcodex.*arclaude.*--provider/s);
-  await assert.rejects(ss({ query: 'q', mode: 'files', paths: ['src'], provider: AG }), /cannot run without web access.*--provider/s);
-  await assert.rejects(ss({ query: 'q', mode: 'files', paths: ['src'], provider: CD, synthProvider: AG }), /synthesis on agy-cli.*--synth-provider auto/s);
-});
-
-test('remote auto excludes AgentRouter workers with local disk access', async () => {
-  assert.equal((await rp('auto', { available: [cx, cl, ag, cd], remote: true, mode: 'files' }))[0].provider.id, CL);
-  assert.deepEqual(ids(await rp('auto', { available: [cx, ag, cd], remote: true, mode: 'files' })), [CD]);
-  assert.ok(cx.localFiles); assert.ok(!cl.localFiles);
-  await assert.rejects(ss({ query: 'q', provider: CX, remote: true, angles: ['a'] }), /can read the server's disk/);
-});
-
-test('SWARM_PROVIDER remains explicit and --provider auto overrides it', async (t) => {
-  mockAvail(t, [CX, AG]); process.env.SWARM_PROVIDER = AG;
-  assert.equal((await rp())[0].provider, ag);
-  assert.equal((await rp('auto', { mode: 'files' }))[0].provider.id, CX);
-  await assert.rejects(ss({ query: 'q', paths: ['src'] }), /cannot run without web access/);
-});
-
-test('remote files validate permitted paths before consulting any provider', async (t) => {
-  const dir = await tmp(t, 'r-');
-  for (const p of PROVIDERS) t.mock.method(p, 'detect', () => assert.fail());
-  await assert.rejects(ss({ query: 'q', mode: 'files', paths: ['src'], filesRoots: [dir], remote: true }), /outside SWARM_FILES_ROOTS/);
+test('remote paths before providers',async t=>{
+  const dir = await tmp(t);
+  for (const p of PROVIDERS) t.mock.method(p,'detect',()=>assert.fail());
+  await rejects(ss({query:'q',mode:'files',paths:['src'],filesRoots:[dir],remote:true }),/outside SWARM_FILES_ROOTS/);
 });

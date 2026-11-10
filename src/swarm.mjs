@@ -398,7 +398,7 @@ export async function swarmSearch(opts) {
   const mode = opts.mode && opts.mode !== 'auto' ? opts.mode : paths.length ? 'files' : 'web';
   const progress = (msg) => opts.onProgress?.(msg);
 
-  // Проверка разрешённых путей не зависит от наличия и выбора LLM-провайдера.
+  // Validate permitted paths before provider selection.
   const collectedFiles = mode === 'files' && opts.filesRoots ? await collectFiles(paths, { roots: opts.filesRoots }) : null;
   const automatic = ['', 'auto'].includes((opts.provider || process.env.SWARM_PROVIDER || 'auto').trim());
   const pool = await resolveProviders(opts.provider, { mode, remote: opts.remote, includeFallbacks: automatic });
@@ -407,7 +407,7 @@ export async function swarmSearch(opts) {
   if (mode === 'files') {
     // В шардах код и конфиги пользователя: провайдер, у которого веб не выключается, стал бы каналом утечки.
     const offline = slots.filter((s) => !s.provider.webAlwaysOn);
-    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access; choose --provider arcodex-cli, arclaude-cli, claude-cli, codex-cli or gemini-cli. Run swarm-search providers to check availability.`);
+    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access; choose --provider arcodex-cli, arclaude-cli, claude-cli, codex-cli or gemini-cli.`);
     if (offline.length < slots.length) progress(`files mode: skipping ${slots.filter((s) => s.provider.webAlwaysOn).map((s) => s.provider.id).join(', ')} (web access cannot be disabled)`);
     slots = offline;
   }
@@ -418,7 +418,7 @@ export async function swarmSearch(opts) {
     if (sandboxed.length < slots.length) progress(`remote client: skipping ${slots.filter((s) => s.provider.localFiles).map((s) => s.provider.id).join(', ')} (can read the server's disk)`);
     slots = sandboxed;
   }
-  // auto держит всех здоровых воркеров на первом провайдере; остальные слоты — только для фейловера.
+  // Auto uses the first provider; other slots are fallbacks.
   const pick = (i) => slots[automatic ? 0 : i % slots.length];
 
   const synthAutomatic = opts.synthProvider ? ['', 'auto'].includes(opts.synthProvider.trim()) : automatic;
@@ -428,10 +428,10 @@ export async function swarmSearch(opts) {
   const synth = opts.synthProvider
     ? { ...synthPool[0] }
     : { provider: slots[0].provider, model: slots[0].model };
-  if (mode === 'files' && synth.provider.webAlwaysOn) throw new Error(`files mode: synthesis on ${synth.provider.id} cannot run without web access; choose --synth-provider auto, arcodex-cli, arclaude-cli, claude-cli, codex-cli, gemini-cli or an API provider. Run swarm-search providers to check availability.`);
+  if (mode === 'files' && synth.provider.webAlwaysOn) throw new Error(`files mode: synthesis on ${synth.provider.id} cannot run without web access; choose --synth-provider auto or an offline CLI; see swarm-search providers.`);
   if (opts.remote && synth.provider.localFiles) throw new Error(`remote clients: synthesis on ${synth.provider.id} can read the server's disk`);
   synth.model = opts.synthModel ?? synth.model ?? synth.provider.defaultModel;
-  const synthCandidates = [synth, ...synthPool.slice(1)
+  const synthCandidates = [{ ...synth }, ...synthPool.slice(1)
     .filter((s) => s.provider.id !== synth.provider.id && (mode !== 'files' || !s.provider.webAlwaysOn) && (!opts.remote || !s.provider.localFiles))
     .map((s) => ({ provider: s.provider, model: opts.synthModel ?? s.model ?? s.provider.defaultModel }))]
     .slice(0, synthAutomatic ? undefined : 2);
@@ -441,50 +441,78 @@ export async function swarmSearch(opts) {
   const serviceCalls = [];
   let retried = 0;
 
-  const completeWithFallback = async (candidates, request, onRetry) => {
+  const fallback = async (candidates,request,onRetry)=>{
     for (let i = 0; i < candidates.length; i++) {
       throwIfCancelled();
       const slot = candidates[i];
-      let response;
-      let error;
+      let response,error;
       try {
-        const res = await slot.provider.complete({ ...request, model: slot.model, timeoutMs, signal });
-        response = { ...res, provider: slot.provider.id, model: slot.model, ...(i ? { retriedFrom: candidates[0].provider.id } : {}) };
+        const res = await slot.provider.complete({...request,model:slot.model,timeoutMs,signal });
+        response = {...res,provider:slot.provider.id,model:slot.model,...(i ? {retriedFrom:candidates[0].provider.id } :{}) };
         if (res.text?.trim()) return response;
         error = new Error('empty response');
       } catch (err) {
         if (signal?.aborted || !isRetryable(err)) throw err;
         error = err;
       }
-      const next = candidates[i + 1];
-      if (!next) {
+      if (i + 1 === candidates.length) {
         if (response) return response;
         throw error;
       }
       if (error.status === 429 || /\b429\b|rate.?limit|too many requests/i.test(`${error.message || ''} ${error.stderr || ''}`)) {
-        await new Promise((r) => setTimeout(r, DEFAULTS.retryBackoffMs));
+        await new Promise((r)=>setTimeout(r,DEFAULTS.retryBackoffMs));
       }
       throwIfCancelled();
-      onRetry?.(slot, next, error);
+      onRetry?.(slot,candidates[i + 1],error);
     }
   };
-  const retryProgress = (label) => (slot, next, error) =>
+  const retryProgress = (label)=>(slot,next,error)=>
     progress(`${label}: ${slot.provider.id} failed (${error.message.slice(0, 80)}), retrying on ${next.provider.id}`);
-  const synthComplete = (request, label) => completeWithFallback(synthCandidates, request, retryProgress(label));
+  const service = (candidates,label)=>({complete:(request)=>fallback(candidates,request,retryProgress(label)) });
+  const planner = service(automatic ? slots :slots.slice(0,1),'planning');
+  const auditor = service(synthCandidates,'round 2 audit');
+  synth.provider = {
+    ...synth.provider,
+    async complete(request) {
+      const res = await service(synthCandidates,'synthesis').complete(request);
+      Object.assign(synth,synthCandidates.find((s)=>s.provider.id === res.provider));
+      return res;
+    },
+  };
 
   // Запускает список заданий на воркерах и превращает результаты в отчёты.
   const runJobs = async (jobs, concurrency, stage) => {
+    const call = async (slot, job) => {
+      throwIfCancelled();
+      const res = await slot.provider.complete({ system: job.system, prompt: job.prompt, model: slot.model, web: job.web, timeoutMs, signal });
+      return { ...res, provider: slot.provider.id, model: slot.model };
+    };
     const tasks = jobs.map((job, i) => async () => {
       const slot = pick(i);
-      // Явный пул сохраняет один повтор; auto перебирает доступные провайдеры по приоритету.
-      const alternatives = automatic ? slots.slice(1) : slots.map((_, k) => slots[(i + 1 + k) % slots.length])
-        .filter((s) => s.provider.id !== slot.provider.id).slice(0, 1);
-      let workerRetried = false;
-      return completeWithFallback([slot, ...alternatives], { system: job.system, prompt: job.prompt, web: job.web }, (current, next, error) => {
-        if (!workerRetried) retried += 1;
-        workerRetried = true;
-        retryProgress(`${stage} worker ${i + 1}`)(current, next, error);
-      });
+      let first;
+      try {
+        const res = await call(slot, job);
+        if (res.text?.trim()) return res;
+        first = { res, error: new Error('empty response') };
+      } catch (err) {
+        if (signal?.aborted || !isRetryable(err)) throw err;
+        first = { error: err };
+      }
+      // Фейловер: один повтор на следующем слоте пула с другим провайдером.
+      const alt = slots.map((_, k) => slots[(i + 1 + k) % slots.length]).find((s) => s.provider.id !== slot.provider.id);
+      if (!alt) {
+        if (first.res) return first.res;
+        throw first.error;
+      }
+      if (first.error?.status === 429 || /\b429\b|rate.?limit|too many requests/i.test(`${first.error?.message || ''} ${first.error?.stderr || ''}`)) {
+        await new Promise((r) => setTimeout(r, DEFAULTS.retryBackoffMs));
+      }
+      throwIfCancelled();
+      retried += 1;
+      progress(`${stage} worker ${i + 1}: ${slot.provider.id} failed (${first.error.message.slice(0, 80)}), retrying on ${alt.provider.id}`);
+      const candidates = automatic ? slots.slice(1) : [alt];
+      const res = await fallback(candidates, { system: job.system, prompt: job.prompt, web: job.web }, retryProgress(`${stage} worker ${i + 1}`));
+      return { ...res, retriedFrom: slot.provider.id };
     });
     let done = 0;
     const results = await runPool(
@@ -560,11 +588,15 @@ export async function swarmSearch(opts) {
         : `First decide how many genuinely independent angles this question has, from 1 to ${cap}. ` +
           `A narrow factual question (one version, one date, one definition) has 1. A comparison of several options, or a "state of X" question, has one per option or facet. ` +
           `Return exactly that many sub-questions, no padding.`;
-      const plan = await completeWithFallback(automatic ? slots : slots.slice(0, 1), {
-        system: PLANNER_SYSTEM,
-        prompt: `Question: ${query}\n\n${sizing} Same language as the question.`,
-        web: false,
-      }, retryProgress('planning'))
+      const plan = await planner
+        .complete({
+          system: PLANNER_SYSTEM,
+          prompt: `Question: ${query}\n\n${sizing} Same language as the question.`,
+          model: slots[0].model,
+          web: false,
+          timeoutMs,
+          signal,
+        })
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
       serviceCalls.push(plan);
@@ -601,11 +633,15 @@ export async function swarmSearch(opts) {
     if (round2Mode === 'gaps') {
       const maxFollowups = Math.min(4, Math.max(1, Math.ceil(useful1.length / 2)));
       progress(`round 2: auditing ${useful1.length} reports for gaps and conflicts`);
-      const audit = await synthComplete({
-        system: GAPS_SYSTEM,
-        prompt: `Original question: ${query}\nMax follow-ups: ${maxFollowups}\n\n${useful1.map((r) => reportBlock(r)).join('\n\n')}`,
-        web: false,
-      }, 'round 2 audit')
+      const audit = await auditor
+        .complete({
+          system: GAPS_SYSTEM,
+          prompt: `Original question: ${query}\nMax follow-ups: ${maxFollowups}\n\n${useful1.map((r) => reportBlock(r)).join('\n\n')}`,
+          model: synth.model,
+          web: false,
+          timeoutMs,
+          signal,
+        })
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
       serviceCalls.push(audit);
@@ -681,7 +717,7 @@ export async function swarmSearch(opts) {
     (useful2.length ? `\n\n## Round 2 (${round2Mode === 'gaps' ? 'gap-filling follow-ups' : 'cross-critique'})\n\n${useful2.map((r) => reportBlock(r, round2Mode === 'gaps' ? 'Follow-up' : 'Critique')).join('\n\n')}` : '') +
     (failed.length ? `\n\nFailed workers: ${failed.map((r) => r.id).join(', ')} (mention that coverage is partial).` : '') +
     (ranking?.dropped ? `\n\n${ranking.dropped} of ${ranking.total} files were ranked as least relevant and not read (mention that coverage is partial).` : '');
-  const synthesis = await synthComplete({ system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, web: false }, 'synthesis');
+  const synthesis = await synth.provider.complete({ system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, model: synth.model, web: false, timeoutMs, signal });
   serviceCalls.push(synthesis);
   const { markdown: answer, check: sourceCheck } = verifySources(synthesis.text.trim(), allReports);
   const usage = summarizeUsage([...serviceCalls, ...allReports], useful1.length + useful2.length);
@@ -694,7 +730,7 @@ export async function swarmSearch(opts) {
     (retried ? ` · retried ${retried}` : '') +
     (ranking ? ` · ranked files: ${ranking.kept}/${ranking.total} kept, ${ranking.dropped} dropped` : '') +
     ` · sources traced to worker reports ${sourceCheck.verified}/${sourceCheck.total}` +
-    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synthesis.provider}:${synthesis.model} · ${elapsed}s · ${usageLine(usage)}_`;
+    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synth.provider.id}:${synth.model} · ${elapsed}s · ${usageLine(usage)}_`;
 
   return {
     markdown: answer + footer,
@@ -710,7 +746,7 @@ export async function swarmSearch(opts) {
       retried,
       ranking,
       sourceCheck,
-      synthesis: { provider: synthesis.provider, model: synthesis.model },
+      synthesis: { provider: synth.provider.id, model: synth.model },
       elapsedSec: Number(elapsed),
       usage,
     },
