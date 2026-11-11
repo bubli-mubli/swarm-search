@@ -261,12 +261,11 @@ test('usage: claude-cli counts cached context, summary gives cost per useful ans
   const sum = summarizeUsage([{ usage: u }, { usage: { inputTokens: 100, outputTokens: 10, costUsd: 0.01 } }, { usage: { inputTokens: 1, outputTokens: 1 } }, {}], 2);
   assert.equal(sum.inputTokens, 5105);
   assert.equal(sum.pricedCalls, 2);
-  assert.equal(sum.costUsd, null);
-  // Часть вызовов без цены — общую стоимость и цену ответа не выдумываем.
+  assert.ok(Math.abs(sum.costUsd - 0.03) < 1e-9);
+  // Часть вызовов без цены — цену ответа не выдумываем.
   assert.equal(sum.costPerUsefulUsd, null);
-  assert.equal(usageLine(sum), 'tokens 5.1k in / 61 out');
+  assert.match(usageLine(sum), /tokens 5\.1k in \/ 61 out · \$0\.030 \(2\/4 calls priced\)_?$/);
   const full = summarizeUsage([{ usage: u }, { usage: { inputTokens: 100, outputTokens: 10, costUsd: 0.01 } }], 2);
-  assert.ok(Math.abs(full.costUsd - 0.03) < 1e-9);
   assert.ok(Math.abs(full.costPerUsefulUsd - 0.015) < 1e-9);
   assert.match(usageLine(full), /\$0\.030 · \$0\.015 per useful answer$/);
   assert.equal(summarizeUsage([{ usage: { inputTokens: 1 } }], 1).costPerUsefulUsd, null);

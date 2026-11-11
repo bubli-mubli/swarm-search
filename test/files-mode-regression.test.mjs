@@ -1,50 +1,37 @@
-import {test,match,readFile,join,fixture,binary,writeServer,cli,eq,deep} from './helpers.mjs';
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { runProcess } from '../src/providers/base.mjs';
 
-test('files CLI auto: arcodex network failure falls directly to Claude, skipping agy and arclaude', async t => {
-  const dir = await fixture(t, 'arcodex', `
-    fs.readFileSync(0, 'utf8');
-    fs.appendFileSync(process.env.TASK6_CALLS, 'arcodex\\n');
-    process.stderr.write('fetch failed: ECONNRESET'); process.exitCode=1;
-  `);
-  for (const name of ['agy','arclaude']) await binary(dir, name, `throw new Error('must skip ${name}');`);
-  await binary(dir, 'claude', `
-    fs.readFileSync(0, 'utf8');
-    if (a[a.indexOf('--tools')+1] !== '') throw new Error('web tools must be disabled');
-    fs.appendFileSync(process.env.TASK6_CALLS, 'claude\\n');
-    process.stdout.write(JSON.stringify({result:'Port 8787 (s.mjs:1)'}));
-  `);
-  const file = await writeServer(dir), log = join(dir, 'calls');
-  const {report} = await cli(file, {TASK6_CALLS:log});
-  eq([report.workers[0].provider,'claude-cli'], [report.workers[0].ok,true], [report.synthesis.provider,'claude-cli']);
-  deep([(await readFile(log,'utf8')).trim().split('\n'), ['arcodex','claude','arcodex','claude']]);
-});
-
-test('files CLI auto: agy and Claude available selects Claude without web-access error', async t => {
-  const dir = await fixture(t, 'agy', `throw new Error('files must not reach agy');`);
-  await binary(dir, 'claude', `
-    const input = fs.readFileSync(0, 'utf8');
-    if (a[a.indexOf('--tools')+1] !== '') throw new Error('web tools must be disabled');
-    fs.appendFileSync(process.env.TASK6_CALLS, input+'\\n');
-    process.stdout.write(JSON.stringify({result:'Port 8787 (s.mjs:1)'}));
-  `);
-  const file = await writeServer(dir), log = join(dir, 'calls');
-  const {report} = await cli(file, {TASK6_CALLS:log});
-  eq([report.workers[0].provider,'claude-cli'], [report.workers[0].ok,true], [report.synthesis.provider,'claude-cli']);
-  match(await readFile(log, 'utf8'), /const port = 8787/);
-});
-
-test('files CLI: skip agy, stdin, policy',async t=>{
-  const dir = await fixture(t,'agy',`process.stderr.write('files must not reach agy');process.exitCode=1;`);
-  const file = await writeServer(dir),calls = join(dir,'calls.jsonl');
-  await binary(dir,'gemini',`let input='';for await(const c of process.stdin)input+=c;
-const policy=a.includes('--policy')?fs.readFileSync(a[a.indexOf('--policy')+1],'utf8'):'';
-fs.appendFileSync(process.env.TASK6_CALLS,JSON.stringify({args:a,input,policy})+'\\n');
-process.stdout.write(JSON.stringify({response:'Port 8787 (s.mjs:1)'}));`);
-  const {markdown,report:r} = await cli(file,{TASK6_CALLS:calls});
-  eq([r.mode,'files'],[r.workers[0].provider,'gemini-cli'],[r.workers[0].ok,true],[r.synthesis.provider,'gemini-cli']);
-  match(markdown,/_swarm-search · mode: files/);
-  const seen = (await readFile(calls,'utf8')).trim().split('\n').map(JSON.parse);
-  eq([seen.length,2]);
-  match(seen[0].input,/const port = 8787/);
-  for (const call of seen) for (const re of [/google_web_search/,/web_fetch/,/decision = "deny"/]) match(call.policy,re);
+test('files CLI auto skips agy and selects an available offline provider', async t => {
+  const scratch = fileURLToPath(new URL('../.scratch/', import.meta.url));
+  await mkdir(scratch, { recursive: true });
+  const dir = await mkdtemp(join(scratch, 'files-regression-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, 'server.mjs'), 'const port = 8787;\n');
+  await writeFile(join(dir, 'agy'), `#!${process.execPath}\nthrow new Error('files must skip agy');\n`, { mode: 0o755 });
+  await writeFile(join(dir, 'gemini'), `#!${process.execPath}
+import fs from 'node:fs';
+const args = process.argv.slice(2);
+const policy = fs.readFileSync(args[args.indexOf('--policy') + 1], 'utf8');
+if (!/google_web_search/.test(policy) || !/web_fetch/.test(policy) || !/decision = "deny"/.test(policy)) throw new Error('web must be disabled');
+let input = ''; for await (const chunk of process.stdin) input += chunk;
+if (!input.includes('8787')) throw new Error('missing corpus or worker answer');
+process.stdout.write(JSON.stringify({ response: 'Port 8787 (server.mjs:1)' }));
+`, { mode: 0o755 });
+  const { stdout } = await runProcess(process.execPath, [
+    fileURLToPath(new URL('../bin/swarm-search.mjs', import.meta.url)), 'run', 'port?',
+    '--mode', 'files', '--paths', join(dir, 'server.mjs'), '--workers', '1', '--rounds', '1', '--rank', 'off', '--json',
+  ], { timeoutMs: 10000, env: {
+    PATH: dir, TMPDIR: scratch, SWARM_PROVIDER: 'auto',
+    ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', GOOGLE_API_KEY: '', OPENROUTER_API_KEY: '',
+  } });
+  const { report, markdown } = JSON.parse(stdout);
+  assert.equal(report.mode, 'files');
+  assert.equal(report.workers[0].provider, 'gemini-cli');
+  assert.equal(report.workers[0].ok, true);
+  assert.equal(report.synthesis.provider, 'gemini-cli');
+  assert.match(markdown, /_swarm-search · mode: files/);
 });

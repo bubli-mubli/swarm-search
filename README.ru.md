@@ -110,11 +110,9 @@ GPT (Codex CLI / OpenAI API) и Gemini (Antigravity CLI / Gemini CLI / Gemini AP
 
 | id провайдера | что использует | что нужно | модель по умолчанию |
 |---|---|---|---|
-| `arcodex-cli` | `arcodex exec` (AgentRouter) | настроенный AgentRouter, `arcodex` в PATH | модель роутера (`SWARM_ARCODEX_MODEL` переопределяет её) |
-| `arclaude-cli` | `arclaude -p` (AgentRouter) | настроенный AgentRouter, `arclaude` в PATH | модель роутера (`SWARM_ARCLAUDE_MODEL` переопределяет её) |
-| `agy-cli` | `agy -p` (Google Antigravity CLI) | логин Antigravity, `agy` в PATH | `gemini-3.8-flash-low` |
 | `claude-cli` | `claude -p` (Claude Code CLI) | подписка Claude, `claude` в PATH | `haiku` |
 | `codex-cli` | `codex exec` (OpenAI Codex CLI) | подписка ChatGPT, `codex` в PATH | `gpt-6-luna` (`SWARM_CODEX_MODEL=` — модель из конфига Codex) |
+| `agy-cli` | `agy -p` (Google Antigravity CLI) | логин Antigravity, `agy` в PATH | `gemini-3.8-flash-low` |
 | `gemini-cli` | `gemini -p` (Gemini CLI) | логин Google / `GEMINI_API_KEY` | `gemini-3.5-flash-lite` |
 | `anthropic` | Messages API | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
 | `openai` | Responses API | `OPENAI_API_KEY` | `gpt-6-luna` |
@@ -123,11 +121,6 @@ GPT (Codex CLI / OpenAI API) и Gemini (Antigravity CLI / Gemini CLI / Gemini AP
 
 `swarm-search providers` показывает, что доступно на машине. `auto` берёт первый доступный
 в порядке таблицы; любую модель по умолчанию можно переопределить через `SWARM_<PROVIDER>_MODEL`.
-При наличии `arcodex` порядок `auto`: arcodex → agy → Claude, затем остальные провайдеры;
-`arclaude` используется вместо arcodex, если тот отсутствует. В files mode agy исключается до выбора.
-Сетевые ошибки, лимиты и несовместимость модели переключают на следующий провайдер.
-В `auto` флаги `--model` и `--synth-model` относятся к первому провайдеру;
-резервные используют собственные модели по умолчанию. Промпты AgentRouter передаются через stdin.
 
 В режиме `mixed` OpenRouter берёт отдельное семейство — `deepseek/deepseek-v4.1-flash`
 (`SWARM_OPENROUTER_MIXED_MODEL`), чтобы не дублировать Haiku. Дешёвый воркер DeepSeek

@@ -185,8 +185,8 @@ export async function runPool(tasks, concurrency, onDone, signal) {
 // Сводка расхода по всем вызовам прогона (план, воркеры, аудит, синтез) и цена одного полезного ответа воркера.
 export function summarizeUsage(calls, usefulAnswers) {
   const sum = (key) => calls.reduce((acc, c) => acc + (Number(c.usage?.[key]) || 0), 0);
-  const priced = calls.filter((c) => Number.isFinite(c.usage?.costUsd));
-  const costUsd = priced.length && priced.length === calls.length ? priced.reduce((acc, c) => acc + c.usage.costUsd, 0) : null;
+  const priced = calls.filter((c) => typeof c.usage?.costUsd === 'number');
+  const costUsd = priced.length ? priced.reduce((acc, c) => acc + c.usage.costUsd, 0) : null;
   return {
     calls: calls.length,
     pricedCalls: priced.length,
@@ -216,7 +216,6 @@ const isUseful = (r) => r.ok && r.text.trim() && !/^NOTHING RELEVANT\.?$/i.test(
 // Падение, которое стоит повторить на другом провайдере: 402/429/5xx, таймаут, лимиты и квоты CLI.
 export function isRetryable(err) {
   const status = Number(err?.status);
-  if ((!status || status === 400) && /unrecognized_model|unsupported model|model[^\n]*(?:not found|not supported|not available|does not exist)|rejected the model\/tool configuration/i.test(`${err?.message || ''} ${err?.stderr || ''}`)) return true;
   if (status === 402 || status === 429 || status >= 500) return true;
   return /fetch failed|ECONNRESET|ETIMEDOUT|timed out|\b(?:HTTP|status:?|code:?)\s*(?:402|429|5\d\d)\b|rate.?limit|too many requests|quota|overloaded|insufficient (?:credits|balance|funds)/i.test(
     `${err?.message || ''} ${err?.stderr || ''}`,
@@ -399,14 +398,15 @@ export async function swarmSearch(opts) {
   const mode = opts.mode && opts.mode !== 'auto' ? opts.mode : paths.length ? 'files' : 'web';
   const progress = (msg) => opts.onProgress?.(msg);
 
-  const collectedFiles = mode === 'files' && opts.filesRoots ? await collectFiles(paths, { roots: opts.filesRoots }) : null;
   const automatic = ['', 'auto'].includes((opts.provider || process.env.SWARM_PROVIDER || 'auto').trim());
-  const pool = await resolveProviders(opts.provider, { mode, remote: opts.remote, includeFallbacks: automatic });
+  const selection = { mode, remote: opts.remote, includeFallbacks: automatic };
+  const pool = await resolveProviders(opts.provider, selection);
+  // Явная модель применяется к каждому провайдеру, у которого модель не задана в спецификации.
   let slots = pool.map((s, i) => ({ provider: s.provider, model: s.model ?? ((!automatic || i === 0) ? opts.model : undefined) ?? s.provider.defaultModel }));
   if (mode === 'files') {
     // В шардах код и конфиги пользователя: провайдер, у которого веб не выключается, стал бы каналом утечки.
     const offline = slots.filter((s) => !s.provider.webAlwaysOn);
-    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access; choose --provider arcodex-cli, arclaude-cli, claude-cli, codex-cli or gemini-cli.`);
+    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access; choose --provider arcodex-cli, arclaude-cli, claude-cli, codex-cli or gemini-cli`);
     if (offline.length < slots.length) progress(`files mode: skipping ${slots.filter((s) => s.provider.webAlwaysOn).map((s) => s.provider.id).join(', ')} (web access cannot be disabled)`);
     slots = offline;
   }
@@ -421,76 +421,58 @@ export async function swarmSearch(opts) {
 
   const synthAutomatic = opts.synthProvider ? ['', 'auto'].includes(opts.synthProvider.trim()) : automatic;
   const synthPool = opts.synthProvider
-    ? await resolveProviders(opts.synthProvider, { mode, remote: opts.remote, includeFallbacks: synthAutomatic })
-    : slots;
+    ? await resolveProviders(opts.synthProvider, { ...selection, includeFallbacks: synthAutomatic }) : slots;
   const synth = opts.synthProvider
     ? { ...synthPool[0] }
     : { provider: slots[0].provider, model: slots[0].model };
-  if (mode === 'files' && synth.provider.webAlwaysOn) throw new Error(`files mode: synthesis on ${synth.provider.id} cannot run without web access; choose --synth-provider auto or an offline CLI; see swarm-search providers.`);
+  if (mode === 'files' && synth.provider.webAlwaysOn) throw new Error(`files mode: synthesis on ${synth.provider.id} cannot run without web access; choose --synth-provider auto or an offline provider`);
   if (opts.remote && synth.provider.localFiles) throw new Error(`remote clients: synthesis on ${synth.provider.id} can read the server's disk`);
   synth.model = opts.synthModel ?? synth.model ?? synth.provider.defaultModel;
-  const synthCandidates = [{ ...synth }, ...synthPool.slice(1)
-    .filter((s) => s.provider.id !== synth.provider.id && (mode !== 'files' || !s.provider.webAlwaysOn) && (!opts.remote || !s.provider.localFiles))
-    .map((s) => ({ provider: s.provider, model: s.model ?? s.provider.defaultModel }))]
-    .slice(0, synthAutomatic ? undefined : 2);
 
   const languageHint = opts.language ? `\nAnswer language: ${opts.language}.` : '';
-  // Каждая попытка учитывается один раз, включая ошибки, таймауты и пустые ответы перед fallback.
-  const calls = [];
+  // Служебные вызовы (план, аудит, синтез) — для подсчёта расхода; воркеры считаются по своим отчётам.
+  const serviceCalls = [];
   let retried = 0;
 
-  const fallback = async (candidates, request, onRetry) => {
+  const complete = async (candidates, request, label, worker = false) => {
     for (let i = 0; i < candidates.length; i++) {
       throwIfCancelled();
       const slot = candidates[i];
-      let response, error;
-      const call = { provider: slot.provider.id, model: slot.model };
-      calls.push(call);
+      let res, error;
       try {
-        const res = await slot.provider.complete({ ...request, model: slot.model, timeoutMs, signal });
-        call.usage = res.usage;
-        response = { ...res, provider: slot.provider.id, model: slot.model, ...(i ? { retriedFrom: candidates[0].provider.id } : {}) };
-        if (res.text?.trim()) return response;
+        res = await slot.provider.complete({ ...request, model: slot.model, timeoutMs, signal });
+        res = { ...res, provider: slot.provider.id, model: slot.model, ...(i ? { retriedFrom: candidates[0].provider.id } : {}) };
+        if (res.text?.trim()) return res;
         error = new Error('empty response');
       } catch (err) {
         if (signal?.aborted || !isRetryable(err)) throw err;
         error = err;
       }
       if (i + 1 === candidates.length) {
-        if (response) return response;
+        if (res) return res;
         throw error;
       }
-      if (error.status === 429 || /\b429\b|rate.?limit|too many requests/i.test(`${error.message || ''} ${error.stderr || ''}`)) {
-        await new Promise((r) => setTimeout(r, DEFAULTS.retryBackoffMs));
+      serviceCalls.push(res || { error });
+      if (error.status === 429 || /rate.?limit|too many requests|\b429\b/i.test(error.message)) {
+        await new Promise(r => setTimeout(r, DEFAULTS.retryBackoffMs));
       }
       throwIfCancelled();
-      onRetry?.(slot, candidates[i + 1], error);
+      if (worker && i === 0) retried += 1;
+      progress(`${label}: ${slot.provider.id} failed (${error.message.slice(0, 80)}), retrying on ${candidates[i + 1].provider.id}`);
     }
   };
-  const retryProgress = (label) => (slot, next, error) =>
-    progress(`${label}: ${slot.provider.id} failed (${error.message.slice(0, 80)}), retrying on ${next.provider.id}`);
-  const service = (candidates, label) => ({ complete: (request) => fallback(candidates, request, retryProgress(label)) });
-  const planner = service(automatic ? slots : slots.slice(0, 1), 'planning');
-  const auditor = service(synthCandidates, 'round 2 audit');
-  synth.provider = {
-    ...synth.provider,
-    async complete(request) {
-      const res = await service(synthCandidates, 'synthesis').complete(request);
-      Object.assign(synth, synthCandidates.find((s) => s.provider.id === res.provider));
-      return res;
-    },
-  };
+  const synthCandidates = [synth, ...synthPool.filter(s => s.provider.id !== synth.provider.id &&
+    (mode !== 'files' || !s.provider.webAlwaysOn) && (!opts.remote || !s.provider.localFiles))
+    .slice(0, synthAutomatic ? undefined : 1).map(s => ({ provider: s.provider, model: s.model ?? s.provider.defaultModel }))];
 
   // Запускает список заданий на воркерах и превращает результаты в отчёты.
   const runJobs = async (jobs, concurrency, stage) => {
     const tasks = jobs.map((job, i) => async () => {
       const slot = pick(i);
+      // Фейловер: один повтор на следующем слоте пула с другим провайдером.
       const alt = slots.map((_, k) => slots[(i + 1 + k) % slots.length]).find((s) => s.provider.id !== slot.provider.id);
-      const candidates = automatic ? slots : [slot, ...(alt ? [alt] : [])];
-      return fallback(candidates, { system: job.system, prompt: job.prompt, web: job.web }, (failed, next, error) => {
-        if (failed === slot) retried += 1;
-        retryProgress(`${stage} worker ${i + 1}`)(failed, next, error);
-      });
+      return complete(automatic ? slots : [slot, ...(alt ? [alt] : [])],
+        { system: job.system, prompt: job.prompt, web: job.web }, `${stage} worker ${i + 1}`, true);
     });
     let done = 0;
     const results = await runPool(
@@ -528,7 +510,7 @@ export async function swarmSearch(opts) {
   if (mode === 'files') {
     if (!paths.length) throw new Error('mode=files requires paths');
     progress(`collecting files from ${paths.join(', ')}`);
-    let files = collectedFiles ?? await collectFiles(paths, { roots: opts.filesRoots });
+    let files = await collectFiles(paths, { roots: opts.filesRoots });
     // Ранжирование до шардинга: на большом корпусе воркеры читают сначала релевантное, остаток отбрасывается не молча.
     const rank = rankMode(opts.rank ?? DEFAULTS.rank);
     const corpusChars = files.reduce((sum, f) => sum + f.size, 0);
@@ -566,17 +548,17 @@ export async function swarmSearch(opts) {
         : `First decide how many genuinely independent angles this question has, from 1 to ${cap}. ` +
           `A narrow factual question (one version, one date, one definition) has 1. A comparison of several options, or a "state of X" question, has one per option or facet. ` +
           `Return exactly that many sub-questions, no padding.`;
-      const plan = await planner
-        .complete({
+      const plan = await complete(automatic ? slots : slots.slice(0, 1), {
           system: PLANNER_SYSTEM,
           prompt: `Question: ${query}\n\n${sizing} Same language as the question.`,
           model: slots[0].model,
           web: false,
           timeoutMs,
           signal,
-        })
+        }, 'planning')
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
+      serviceCalls.push(plan);
       angles = parseAngles(plan.text, cap) || fallbackAngles(query, fixedWorkers ?? 3);
     }
     concurrency = fixedWorkers ?? angles.length;
@@ -610,17 +592,17 @@ export async function swarmSearch(opts) {
     if (round2Mode === 'gaps') {
       const maxFollowups = Math.min(4, Math.max(1, Math.ceil(useful1.length / 2)));
       progress(`round 2: auditing ${useful1.length} reports for gaps and conflicts`);
-      const audit = await auditor
-        .complete({
+      const audit = await complete(synthCandidates, {
           system: GAPS_SYSTEM,
           prompt: `Original question: ${query}\nMax follow-ups: ${maxFollowups}\n\n${useful1.map((r) => reportBlock(r)).join('\n\n')}`,
           model: synth.model,
           web: false,
           timeoutMs,
           signal,
-        })
+        }, 'round 2 audit')
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
+      serviceCalls.push(audit);
       const followups = parseFollowups(audit.text, maxFollowups);
       if (!followups.length) {
         round2Note = 'gaps: none found';
@@ -693,9 +675,11 @@ export async function swarmSearch(opts) {
     (useful2.length ? `\n\n## Round 2 (${round2Mode === 'gaps' ? 'gap-filling follow-ups' : 'cross-critique'})\n\n${useful2.map((r) => reportBlock(r, round2Mode === 'gaps' ? 'Follow-up' : 'Critique')).join('\n\n')}` : '') +
     (failed.length ? `\n\nFailed workers: ${failed.map((r) => r.id).join(', ')} (mention that coverage is partial).` : '') +
     (ranking?.dropped ? `\n\n${ranking.dropped} of ${ranking.total} files were ranked as least relevant and not read (mention that coverage is partial).` : '');
-  const synthesis = await synth.provider.complete({ system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, model: synth.model, web: false, timeoutMs, signal });
+  const synthesis = await complete(synthCandidates, { system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, web: false }, 'synthesis');
+  Object.assign(synth, synthCandidates.find(s => s.provider.id === synthesis.provider));
+  serviceCalls.push(synthesis);
   const { markdown: answer, check: sourceCheck } = verifySources(synthesis.text.trim(), allReports);
-  const usage = summarizeUsage(calls, useful1.length + useful2.length);
+  const usage = summarizeUsage([...serviceCalls, ...allReports], useful1.length + useful2.length);
 
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
   const familiesUsed = [...new Set(allReports.filter((r) => r.ok).map((r) => `${r.provider}${r.model ? `:${r.model}` : ''}`))];

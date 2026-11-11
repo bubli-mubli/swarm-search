@@ -36,7 +36,7 @@ Minimal: `swarm_search({ query })`. Useful options:
 | `workers` | omit → auto: the planner decides how many independent angles the question has (1–8). Pass a number only when the user asked for one |
 | `rounds` | `1` (default) or `2`. Use 2 when the question is contested, the answer depends on conflicting sources, or `provider` is `mixed` |
 | `round2` | `gaps` (default, cheap: auditor + a few follow-up workers) or `critique` (every worker reviews the others; N extra calls) |
-| `provider` | `auto` (AgentRouter → agy → Claude; compatible only), `mixed` (one per model family), or an id like `arcodex-cli`, `arclaude-cli`, `claude-cli`, `codex-cli`, `agy-cli`, `anthropic`, `openai`, `google`, `openrouter`; `id:model` pins a model |
+| `provider` | `auto` (first available), `mixed` (one per model family), or an id like `claude-cli`, `codex-cli`, `agy-cli`, `anthropic`, `openai`, `google`, `openrouter`; `id:model` pins a model |
 | `synth_provider` / `synth_model` | stronger model for the final synthesis only |
 | `angles` | your own sub-questions, skips the planner |
 | `language` | force answer language |
