@@ -185,8 +185,8 @@ export async function runPool(tasks, concurrency, onDone, signal) {
 // Сводка расхода по всем вызовам прогона (план, воркеры, аудит, синтез) и цена одного полезного ответа воркера.
 export function summarizeUsage(calls, usefulAnswers) {
   const sum = (key) => calls.reduce((acc, c) => acc + (Number(c.usage?.[key]) || 0), 0);
-  const priced = calls.filter((c) => typeof c.usage?.costUsd === 'number');
-  const costUsd = priced.length ? priced.reduce((acc, c) => acc + c.usage.costUsd, 0) : null;
+  const priced = calls.filter((c) => Number.isFinite(c.usage?.costUsd));
+  const costUsd = priced.length && priced.length === calls.length ? priced.reduce((acc, c) => acc + c.usage.costUsd, 0) : null;
   return {
     calls: calls.length,
     pricedCalls: priced.length,
@@ -422,7 +422,7 @@ export async function swarmSearch(opts) {
   const synthAutomatic = opts.synthProvider ? ['', 'auto'].includes(opts.synthProvider.trim()) : automatic;
   const synthPool = opts.synthProvider
     ? await resolveProviders(opts.synthProvider, { mode, remote: opts.remote, includeFallbacks: synthAutomatic })
-    : pool;
+    : slots;
   const synth = opts.synthProvider
     ? { ...synthPool[0] }
     : { provider: slots[0].provider, model: slots[0].model };
@@ -435,8 +435,8 @@ export async function swarmSearch(opts) {
     .slice(0, synthAutomatic ? undefined : 2);
 
   const languageHint = opts.language ? `\nAnswer language: ${opts.language}.` : '';
-  // Служебные вызовы (план, аудит, синтез) — для подсчёта расхода; воркеры считаются по своим отчётам.
-  const serviceCalls = [];
+  // Каждая попытка учитывается один раз, включая ошибки, таймауты и пустые ответы перед fallback.
+  const calls = [];
   let retried = 0;
 
   const fallback = async (candidates, request, onRetry) => {
@@ -444,8 +444,11 @@ export async function swarmSearch(opts) {
       throwIfCancelled();
       const slot = candidates[i];
       let response, error;
+      const call = { provider: slot.provider.id, model: slot.model };
+      calls.push(call);
       try {
         const res = await slot.provider.complete({ ...request, model: slot.model, timeoutMs, signal });
+        call.usage = res.usage;
         response = { ...res, provider: slot.provider.id, model: slot.model, ...(i ? { retriedFrom: candidates[0].provider.id } : {}) };
         if (res.text?.trim()) return response;
         error = new Error('empty response');
@@ -457,7 +460,6 @@ export async function swarmSearch(opts) {
         if (response) return response;
         throw error;
       }
-      if (response) serviceCalls.push(response);
       if (error.status === 429 || /\b429\b|rate.?limit|too many requests/i.test(`${error.message || ''} ${error.stderr || ''}`)) {
         await new Promise((r) => setTimeout(r, DEFAULTS.retryBackoffMs));
       }
@@ -575,7 +577,6 @@ export async function swarmSearch(opts) {
         })
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
-      serviceCalls.push(plan);
       angles = parseAngles(plan.text, cap) || fallbackAngles(query, fixedWorkers ?? 3);
     }
     concurrency = fixedWorkers ?? angles.length;
@@ -620,7 +621,6 @@ export async function swarmSearch(opts) {
         })
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
-      serviceCalls.push(audit);
       const followups = parseFollowups(audit.text, maxFollowups);
       if (!followups.length) {
         round2Note = 'gaps: none found';
@@ -694,9 +694,8 @@ export async function swarmSearch(opts) {
     (failed.length ? `\n\nFailed workers: ${failed.map((r) => r.id).join(', ')} (mention that coverage is partial).` : '') +
     (ranking?.dropped ? `\n\n${ranking.dropped} of ${ranking.total} files were ranked as least relevant and not read (mention that coverage is partial).` : '');
   const synthesis = await synth.provider.complete({ system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, model: synth.model, web: false, timeoutMs, signal });
-  serviceCalls.push(synthesis);
   const { markdown: answer, check: sourceCheck } = verifySources(synthesis.text.trim(), allReports);
-  const usage = summarizeUsage([...serviceCalls, ...allReports], useful1.length + useful2.length);
+  const usage = summarizeUsage(calls, useful1.length + useful2.length);
 
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
   const familiesUsed = [...new Set(allReports.filter((r) => r.ok).map((r) => `${r.provider}${r.model ? `:${r.model}` : ''}`))];
