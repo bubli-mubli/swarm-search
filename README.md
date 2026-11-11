@@ -109,9 +109,11 @@ The MCP tool output starts with a note that the content was compiled from untrus
 
 | provider id | what it uses | needs | default model |
 |---|---|---|---|
+| `arcodex-cli` | `arcodex exec` (AgentRouter) | configured AgentRouter, `arcodex` in PATH | router default (`SWARM_ARCODEX_MODEL` overrides it) |
+| `arclaude-cli` | `arclaude -p` (AgentRouter) | configured AgentRouter, `arclaude` in PATH | router default (`SWARM_ARCLAUDE_MODEL` overrides it) |
+| `agy-cli` | `agy -p` (Google Antigravity CLI) | Antigravity login, `agy` in PATH | `gemini-3.8-flash-low` |
 | `claude-cli` | `claude -p` (Claude Code CLI) | Claude subscription, `claude` in PATH | `haiku` |
 | `codex-cli` | `codex exec` (OpenAI Codex CLI) | ChatGPT subscription, `codex` in PATH | `gpt-6-luna` (`SWARM_CODEX_MODEL=` = your Codex default) |
-| `agy-cli` | `agy -p` (Google Antigravity CLI) | Antigravity login, `agy` in PATH | `gemini-3.8-flash-low` |
 | `gemini-cli` | `gemini -p` (Gemini CLI) | Google login / `GEMINI_API_KEY` | `gemini-3.5-flash-lite` |
 | `anthropic` | Messages API | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
 | `openai` | Responses API | `OPENAI_API_KEY` | `gpt-6-luna` |
@@ -120,6 +122,11 @@ The MCP tool output starts with a note that the content was compiled from untrus
 
 `swarm-search providers` shows which ones are usable on your machine. `auto` picks the first
 available in the order above; every default model can be overridden with `SWARM_<PROVIDER>_MODEL`.
+When `arcodex` is available, `auto` uses arcodex → agy → Claude, then the remaining providers;
+`arclaude` is the router alternative when `arcodex` is absent. Files mode skips agy before selection.
+Network, quota and model-compatibility failures fall through to the next provider. In `auto`,
+`--model` and `--synth-model` apply to the first provider; fallbacks use their own defaults.
+AgentRouter prompts use stdin, including large files shards.
 
 In `mixed` mode OpenRouter brings a separate model family, `deepseek/deepseek-v4.1-flash`
 (`SWARM_OPENROUTER_MIXED_MODEL`), instead of a second Haiku. A cheap DeepSeek worker by hand:

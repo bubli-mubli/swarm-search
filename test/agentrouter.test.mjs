@@ -6,12 +6,12 @@ const req = {system:'S',prompt:'P',model:'m',timeoutMs:5000};
 test('argv, read-only, web',()=>{
   const c = cx.buildArgs({...req,web:false,outFile:'/tmp/o'});
   deep([[c[0],c.includes('--ephemeral'),c.includes('read-only'),flag(c,'-m'),flag(c,'-o'),c.includes('web_search="disabled"'),c.slice(-2)],
-    ['exec',true,true,'m','/tmp/o',true,['--',mergeSystem('S','P')]]]);
+    ['exec',true,true,'m','/tmp/o',true,['/tmp/o','-']]]);
   const web = cx.buildArgs({model:'',prompt:'P',web:true,outFile:'/tmp/o'});
   ok(web.includes('web_search="live"') && !web.includes('-m'));
   const k = cl.buildArgs({...req,model:'sonnet',web:false});
-  deep([[k[0],flag(k,'--model'),flag(k,'--output-format'),flag(k,'--tools'),flag(k,'--system-prompt'),k.slice(-2)],
-    ['-p','sonnet','json','','S',['--','P']]]);
+  deep([[k[0],flag(k,'--model'),flag(k,'--output-format'),flag(k,'--tools'),flag(k,'--system-prompt'),k.includes('P')],
+    ['-p','sonnet','json','','S',false]]);
   ok(cl.buildArgs({model:'haiku',prompt:'P',web:true}).includes('--allowedTools'));
 });
 test('router model defaults',async t=>{
@@ -33,7 +33,8 @@ for (const [name,p,other,data,want,keys] of [
     eq([await p.detect(),true],[await other.detect(),false]);
     const res = await p.complete(req),[a,input] = JSON.parse(await readFile(log,'utf8'));
     if (name === 'arcodex') eq([res.text,want]); else deep([res,want]);
-    eq([input,''],[a.at(-1),name === 'arcodex' ? mergeSystem('S','P') :'P']);
+    eq([input,name === 'arcodex' ? mergeSystem('S','P') :'P']);
+    if (name === 'arcodex') eq([a.at(-1),'-']); else ok(!a.includes('P'));
     if (name === 'arcodex') ok(a.includes('web_search="disabled"')); else eq([flag(a,'--system-prompt'),'S']);
     env(t,vals);
     eq([(await p.complete({prompt:'P',timeoutMs:5000})).text,'ANSWER']);
@@ -107,7 +108,7 @@ for (let [kind,opts,prefix,text] of [
     });
 }
   const pl = prefix ? t.mock.method(ag,'complete',async ({system,model,web})=>{
-    ok(system.startsWith(prefix)); eq([web,false]); if (gaps) eq([model,'s-mod']);
+    ok(system.startsWith(prefix)); eq([web,false]); if (gaps) eq([model,ag.defaultModel]);
     return {text};
   }) :mockFail(t,ag);
   const {report:r} = await ss({query:'q',...opts});
