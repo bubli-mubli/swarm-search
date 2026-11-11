@@ -213,12 +213,12 @@ export function usageLine(u) {
 
 const isUseful = (r) => r.ok && r.text.trim() && !/^NOTHING RELEVANT\.?$/i.test(r.text.trim());
 
-// Падение, которое стоит повторить: отказ по модели, 402/429/5xx, таймаут, лимиты и квоты CLI.
+// Падение, которое стоит повторить на другом провайдере: 402/429/5xx, таймаут, лимиты и квоты CLI.
 export function isRetryable(err) {
   const status = Number(err?.status);
   if ((!status || status === 400) && /unrecognized_model|unsupported model|model[^\n]*(?:not found|not supported|not available|does not exist)|rejected the model\/tool configuration/i.test(`${err?.message || ''} ${err?.stderr || ''}`)) return true;
   if (status === 402 || status === 429 || status >= 500) return true;
-  return /timed out|\b(?:HTTP|status:?|code:?)\s*(?:402|429|5\d\d)\b|rate.?limit|too many requests|quota|overloaded|insufficient (?:credits|balance|funds)/i.test(
+  return /fetch failed|ECONNRESET|ETIMEDOUT|timed out|\b(?:HTTP|status:?|code:?)\s*(?:402|429|5\d\d)\b|rate.?limit|too many requests|quota|overloaded|insufficient (?:credits|balance|funds)/i.test(
     `${err?.message || ''} ${err?.stderr || ''}`,
   );
 }
@@ -399,11 +399,9 @@ export async function swarmSearch(opts) {
   const mode = opts.mode && opts.mode !== 'auto' ? opts.mode : paths.length ? 'files' : 'web';
   const progress = (msg) => opts.onProgress?.(msg);
 
-  // Validate paths before selecting a provider.
   const collectedFiles = mode === 'files' && opts.filesRoots ? await collectFiles(paths, { roots: opts.filesRoots }) : null;
   const automatic = ['', 'auto'].includes((opts.provider || process.env.SWARM_PROVIDER || 'auto').trim());
   const pool = await resolveProviders(opts.provider, { mode, remote: opts.remote, includeFallbacks: automatic });
-  // В auto общая модель относится только к первому провайдеру; у резервных свой дефолт.
   let slots = pool.map((s, i) => ({ provider: s.provider, model: s.model ?? ((!automatic || i === 0) ? opts.model : undefined) ?? s.provider.defaultModel }));
   if (mode === 'files') {
     // В шардах код и конфиги пользователя: провайдер, у которого веб не выключается, стал бы каналом утечки.
@@ -419,7 +417,6 @@ export async function swarmSearch(opts) {
     if (sandboxed.length < slots.length) progress(`remote client: skipping ${slots.filter((s) => s.provider.localFiles).map((s) => s.provider.id).join(', ')} (can read the server's disk)`);
     slots = sandboxed;
   }
-  // Auto: first provider, then fallbacks.
   const pick = (i) => slots[automatic ? 0 : i % slots.length];
 
   const synthAutomatic = opts.synthProvider ? ['', 'auto'].includes(opts.synthProvider.trim()) : automatic;
@@ -460,6 +457,7 @@ export async function swarmSearch(opts) {
         if (response) return response;
         throw error;
       }
+      if (response) serviceCalls.push(response);
       if (error.status === 429 || /\b429\b|rate.?limit|too many requests/i.test(`${error.message || ''} ${error.stderr || ''}`)) {
         await new Promise((r) => setTimeout(r, DEFAULTS.retryBackoffMs));
       }
@@ -485,9 +483,8 @@ export async function swarmSearch(opts) {
   const runJobs = async (jobs, concurrency, stage) => {
     const tasks = jobs.map((job, i) => async () => {
       const slot = pick(i);
-      // Explicit: one retry; auto: full chain.
       const alt = slots.map((_, k) => slots[(i + 1 + k) % slots.length]).find((s) => s.provider.id !== slot.provider.id);
-      const candidates = automatic ? slots : [slot, ...(alt ? [{ provider: alt.provider, model: pool.find((s) => s.provider.id === alt.provider.id)?.model ?? alt.provider.defaultModel }] : [])];
+      const candidates = automatic ? slots : [slot, ...(alt ? [alt] : [])];
       return fallback(candidates, { system: job.system, prompt: job.prompt, web: job.web }, (failed, next, error) => {
         if (failed === slot) retried += 1;
         retryProgress(`${stage} worker ${i + 1}`)(failed, next, error);
