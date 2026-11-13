@@ -46,7 +46,7 @@ for (const round2 of ['gaps', 'critique']) {
     assert.equal(fetchMock.mock.callCount(), 0);
     assert.equal(lookupMock.mock.callCount(), 0);
     assert.ok(requests.every((request) => request.web === false));
-    assert.equal(result.report.round2.length, 1);
+    assert.equal(result.report.round2.length, round2 === 'gaps' ? 1 : result.report.workers.length);
     for (const worker of [...result.report.workers, ...result.report.round2]) {
       assert.equal(worker.sourceVerification?.[0]?.reason, 'no_fetch_files_mode');
       assert.doesNotMatch(worker.text, /VERIFIED=yes/);

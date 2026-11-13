@@ -533,9 +533,10 @@ export async function swarmSearch(opts) {
       const slot = pick(i);
       if (mode === 'files') {
         const res = await call(slot, job, `${stage} worker ${i + 1}`);
-        if (res.provider === slot.provider.id) return res;
+        const checked = { ...res, ...await verifyWorkerSources(res.text, { timeoutMs, signal, mode }) };
+        if (res.provider === slot.provider.id) return checked;
         retried += 1;
-        return { ...res, retriedFrom: slot.provider.id };
+        return { ...checked, retriedFrom: slot.provider.id };
       }
       // Фейловер: один повтор на следующем слоте пула с другим провайдером.
       const alt = slots.map((_, k) => slots[(i + 1 + k) % slots.length]).find((s) => s.provider.id !== slot.provider.id);
@@ -563,7 +564,7 @@ export async function swarmSearch(opts) {
       text: r.ok ? r.value.text : '',
       error: r.ok ? null : String(r.error?.message || r.error),
       usage: r.ok ? r.value.usage : undefined,
-      ...(mode !== 'files' && r.ok ? { sourceVerification: r.value.sourceVerification } : {}),
+      ...(r.ok ? { sourceVerification: r.value.sourceVerification } : {}),
       ...(r.ok && r.value.retriedFrom ? { retriedFrom: r.value.retriedFrom } : {}),
     }));
   };

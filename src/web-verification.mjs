@@ -47,7 +47,7 @@ async function readBody(response) {
   }
 }
 
-export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal } = {}) {
+export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal, mode = 'web' } = {}) {
   const clean = stripVerification(text);
   const lines = clean.split('\n');
   const sourceVerification = [];
@@ -65,8 +65,8 @@ export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal } =
       const quote = urls.length === 1 && quoted ? (quoted[1] || quoted[2] || quoted[3]).trim() : '';
       const marks = [];
       for (const url of urls) {
-        const evidence = { url, quote, verified: 'unverified', reason: 'no_fetch' };
-        if (quote && (pages.has(url) || pages.size < 12) && !controller.signal.aborted) {
+        const evidence = { url, quote, verified: 'unverified', reason: mode === 'files' ? 'no_fetch_files_mode' : 'no_fetch' };
+        if (mode !== 'files' && quote && (pages.has(url) || pages.size < 12) && !controller.signal.aborted) {
           if (!pages.has(url)) {
             try {
               const response = await fetchSource(url, { signal: controller.signal });
