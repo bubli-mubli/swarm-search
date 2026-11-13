@@ -398,13 +398,13 @@ export async function swarmSearch(opts) {
   const mode = opts.mode && opts.mode !== 'auto' ? opts.mode : paths.length ? 'files' : 'web';
   const progress = (msg) => opts.onProgress?.(msg);
 
-  const pool = await resolveProviders(opts.provider);
+  const pool = await resolveProviders(opts.provider, { mode });
   // Явная модель применяется к каждому провайдеру, у которого модель не задана в спецификации.
   let slots = pool.map((s) => ({ provider: s.provider, model: s.model ?? opts.model ?? s.provider.defaultModel }));
   if (mode === 'files') {
     // В шардах код и конфиги пользователя: провайдер, у которого веб не выключается, стал бы каналом утечки.
     const offline = slots.filter((s) => !s.provider.webAlwaysOn);
-    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access, choose another provider`);
+    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access; choose --provider claude-cli, codex-cli or gemini-cli`);
     if (offline.length < slots.length) progress(`files mode: skipping ${slots.filter((s) => s.provider.webAlwaysOn).map((s) => s.provider.id).join(', ')} (web access cannot be disabled)`);
     slots = offline;
   }
@@ -418,7 +418,7 @@ export async function swarmSearch(opts) {
   const pick = (i) => slots[i % slots.length];
 
   const synth = opts.synthProvider
-    ? (await resolveProviders(opts.synthProvider))[0]
+    ? (await resolveProviders(opts.synthProvider, { mode }))[0]
     : { provider: slots[0].provider, model: slots[0].model };
   if (mode === 'files' && synth.provider.webAlwaysOn) throw new Error(`files mode: synthesis on ${synth.provider.id} cannot run without web access`);
   if (opts.remote && synth.provider.localFiles) throw new Error(`remote clients: synthesis on ${synth.provider.id} can read the server's disk`);

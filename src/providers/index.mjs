@@ -20,20 +20,27 @@ export async function detectAvailable() {
 
 // Разбирает спецификацию вида "claude-cli", "codex-cli:gpt-5-mini", "mixed",
 // "claude-cli,agy-cli" → массив {provider, model}. Пустая строка = авто.
-export async function resolveProviders(spec, { available } = {}) {
-  const avail = available ?? (await detectAvailable());
+export async function resolveProviders(spec, { available, mode } = {}) {
+  const detected = available ?? (await detectAvailable());
   const raw = (spec || process.env.SWARM_PROVIDER || 'auto').trim();
+  // files mode: автовыбор берёт только провайдеров, у которых веб отключается (иначе агент-ловушка agy "cannot run without web access").
+  const avail = mode === 'files' ? detected.filter((p) => !p.webAlwaysOn) : detected;
+  const requireAny = () => {
+    if (avail.length) return;
+    if (detected.length) throw new Error(`files mode: ${detected.map((p) => p.id).join(', ')} cannot run without web access; install or choose an offline provider, e.g. --provider claude-cli, codex-cli or gemini-cli`);
+    throw new Error(noProvidersMessage());
+  };
 
   if (raw === 'auto' || raw === '') {
-    if (!avail.length) throw new Error(noProvidersMessage());
+    requireAny();
     return [{ provider: avail[0], model: undefined }];
   }
 
   if (raw === 'mixed') {
     // По одному провайдеру на семейство моделей — чтобы воркеры реально были разными.
     const seen = new Set();
+    requireAny();
     const picked = avail.filter((p) => (seen.has(p.family) ? false : (seen.add(p.family), true)));
-    if (!picked.length) throw new Error(noProvidersMessage());
     return picked.map((provider) => ({ provider, model: provider.mixedModel }));
   }
 
