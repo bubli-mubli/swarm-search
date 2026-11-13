@@ -1,6 +1,6 @@
 // Пайплайн swarm search: план → параллельные воркеры → (второй раунд) → синтез итога.
 import { resolveProviders } from './providers/index.mjs';
-import { collectFiles, buildShards, rankFiles } from './corpus.mjs';
+import { assertPathsAllowed, collectFiles, buildShards, rankFiles } from './corpus.mjs';
 import { randomBytes } from 'node:crypto';
 
 export const DEFAULTS = {
@@ -398,6 +398,7 @@ export async function swarmSearch(opts) {
   const mode = opts.mode && opts.mode !== 'auto' ? opts.mode : paths.length ? 'files' : 'web';
   const progress = (msg) => opts.onProgress?.(msg);
 
+  if (mode === 'files' && opts.remote && opts.filesRoots) await assertPathsAllowed(paths, opts.filesRoots);
   const automatic = ['', 'auto'].includes((opts.provider || process.env.SWARM_PROVIDER || 'auto').trim());
   const selection = { mode, remote: opts.remote, includeFallbacks: automatic };
   const pool = await resolveProviders(opts.provider, selection);
