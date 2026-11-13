@@ -11,9 +11,9 @@ function routerError(provider, error) {
   let reason = error.message || 'unknown error', status = error.status;
   if (/rate.?limit|too many requests|\b429\b/i.test(d)) {
     reason = 'AgentRouter rate limit exceeded'; status = 429;
-  } else if (/<!doctype\s+html\b|<html\b|captcha|cloudflare|\bWAF\b|cf-chl|HTTP\s*403\b/i.test(d)) {
+  } else if (/<!doctype\s+html\b|<html\b|<head\b|<body\b|captcha|cloudflare|\bWAF\b|cf-chl|HTTP\s*403\b/i.test(d)) {
     reason = 'AgentRouter returned an HTML/WAF captcha page; try the next provider'; status = 503;
-  } else if (/reconnecting\.{0,3}\s*\d+\s*\/\s*\d+|network|fetch failed|failed to fetch|error sending request|connection|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|ENOTFOUND/i.test(d)) {
+  } else if (/reconnecting\.{0,3}\s*\d+\s*\/\s*\d+|fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(d)) {
     reason = 'AgentRouter network connection failed'; status = 503;
   } else if (/unrecognized_model|unsupported model|tools.*reasoning_effort|reasoning_effort.*tools/i.test(d)) {
     reason = 'AgentRouter rejected the model/tool configuration; choose a supported model with --provider arcodex-cli:model'; status = 400;

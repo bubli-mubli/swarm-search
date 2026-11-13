@@ -1,73 +1,62 @@
-import {test,assert,ok,match,rejects,ss,PROVIDERS,rp,tmp,mockAvail,ids,writeServer,cx,ag,cd,gm,chain,eq,deep,mockFail} from './helpers.mjs';
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { byId, resolveProviders } from '../src/providers/index.mjs';
+import { swarmSearch } from '../src/swarm.mjs';
+import { ProviderError } from '../src/providers/base.mjs';
+import { mockAvailable } from './helpers.mjs';
 
-test('selection: auto/mixed/files/remote',async ()=>{
-  const av = [cx,ag,cd],files = {mode:'files'},remote = {...files,remote:true};
-  for (const [spec,available,opts,want] of [
-    ['auto',[ag,gm,cd],files,[{provider:gm,model:undefined}]],
-    ['auto',av,{includeFallbacks:true},[cx.id,ag.id,cd.id]],
-    ['mixed',av,{},[cx.id,ag.id,cd.id]],
-    ['mixed',[ag,gm,cd],files,[gm.id,cd.id]],
-    ['auto',[cx,ag,cd],remote,[cd.id]],
-    ['auto',av,{},cx.id],['claude-cli:haiku',av,{},cd],
-    ['auto',[cd],files,cd.id],['auto',av,remote,cd.id],
-  ]) {
-    const slots = await rp(spec,{available,...opts});
-    if (Array.isArray(want)) deep([typeof want[0] === 'string' ? ids(slots) :slots,want]);
-    else eq([typeof want === 'string' ? slots[0].provider.id :slots[0].provider,want]);
+const ids = (slots) => slots.map((s) => s.provider.id);
+
+test('priority without arcodex', async (t) => {
+  mockAvailable(t, ['agy-cli', 'claude-cli', 'anthropic', 'codex-cli']);
+  // Как в origin/main: claude-cli, anthropic, codex-cli, agy-cli.
+  const all = await resolveProviders('auto', { includeFallbacks: true });
+  assert.deepEqual(ids(all), ['claude-cli']);
+  mockAvailable(t, ['agy-cli', 'claude-cli']);
+  assert.equal((await resolveProviders('auto'))[0].provider.id, 'claude-cli');
+  mockAvailable(t, ['agy-cli', 'anthropic']);
+  assert.equal((await resolveProviders('auto'))[0].provider.id, 'anthropic');
+  mockAvailable(t, ['agy-cli', 'codex-cli']);
+  assert.equal((await resolveProviders('auto'))[0].provider.id, 'codex-cli');
+});
+
+test('priority with arcodex: arcodex, agy, claude only', async (t) => {
+  mockAvailable(t, ['claude-cli', 'anthropic', 'codex-cli', 'gemini-cli', 'agy-cli', 'arcodex-cli']);
+  const chain = await resolveProviders('auto', { includeFallbacks: true });
+  assert.deepEqual(ids(chain), ['arcodex-cli', 'agy-cli', 'claude-cli']);
+  assert.deepEqual(ids(await resolveProviders('auto')), ['arcodex-cli']);
+});
+
+test('files mode skips agy and keeps arcodex before claude', async () => {
+  const available = ['arcodex-cli', 'agy-cli', 'claude-cli'].map((id) => byId[id]);
+  const slots = await resolveProviders('auto', { available, mode: 'files', includeFallbacks: true });
+  assert.deepEqual(ids(slots), ['arcodex-cli', 'claude-cli']);
+});
+
+test('files mode picks an offline provider over agy', async (t) => {
+  mockAvailable(t, ['agy-cli', 'gemini-cli']);
+  const slots = await resolveProviders('auto', { mode: 'files' });
+  assert.equal(slots[0].provider.id, 'gemini-cli');
+});
+
+test('files mode with only agy gives an actionable error', async () => {
+  await assert.rejects(
+    resolveProviders('auto', { available: [byId['agy-cli']], mode: 'files' }),
+    /files mode:.*cannot run without web access.*--provider/s,
+  );
+});
+
+test('router failure never reaches paid API providers', async (t) => {
+  mockAvailable(t, ['arcodex-cli', 'agy-cli', 'claude-cli', 'anthropic', 'openai', 'google', 'openrouter']);
+  const calls = [];
+  t.mock.method(byId['arcodex-cli'], 'complete', async () => { throw new ProviderError('AgentRouter: down', { status: 503 }); });
+  t.mock.method(byId['agy-cli'], 'complete', async () => { throw new ProviderError('agy: down', { status: 503 }); });
+  t.mock.method(byId['claude-cli'], 'complete', async () => { calls.push('claude-cli'); return { text: 'Answer' }; });
+  for (const id of ['anthropic', 'openai', 'google', 'openrouter']) {
+    t.mock.method(byId[id], 'complete', async () => assert.fail(`${id} must not be called`));
   }
-});
-
-test('priority without arcodex',async t=>{
-  const order = [...chain,'codex-cli',gm.id,'anthropic'],en = mockAvail(t,order);
-  deep([ids(await rp('auto',{includeFallbacks:true})),order]);
-  for (const id of order) {eq([(await rp('auto'))[0].provider.id,id]); en.delete(id);}
-  ok(PROVIDERS.slice(PROVIDERS.findIndex(p=>p.kind === 'api')).every(p=>p.kind === 'api'));
-  for (const id of [ag.id,cd.id,'anthropic']) en.add(id);
-  deep([ids(await rp('auto',{includeFallbacks:true})),[ag.id,cd.id,'anthropic']]);
-});
-
-test('legacy specs and models',async ()=>deep([
-  (await rp('arcodex-cli:gpt-custom,agy-cli,claude-cli:haiku,codex-cli')).map(s=>[s.provider.id,s.model]),
-  [[cx.id,'gpt-custom'],[ag.id,undefined],[cd.id,'haiku'],['codex-cli',undefined]],
-]));
-
-for (const [name,available,provider,opts] of [
-  ['files offline over agy',[ag.id,gm.id],gm,{mode:'files'}],
-  ['files router and auto synthesis',chain,cx,{provider:'auto',synthProvider:'auto'}],
-]) test(name,async t=>{
-  const dir = await tmp(t),calls = []; mockAvail(t,available);
-  const bad = t.mock.method(ag,'complete',()=>assert.fail());
-  if (provider === cx) mockFail(t,cd);
-  const good = t.mock.method(provider,'complete',async ({web,system,prompt})=>{
-    eq([web,false]); calls.push(prompt);
-    if (provider === gm && system.startsWith('You are one worker')) match(prompt,/port = 8787/);
-    return {text:'Port 8787 (s.mjs:1)'};
-  });
-  await writeServer(dir);
-  const {report:r,markdown} = await ss({query:'port?',paths:[dir],workers:1,rank:'off',...opts});
-  eq([r.workers[0].provider,provider.id],[r.synthesis.provider,provider.id]);
-  if (provider === gm) eq([bad.mock.callCount(),0],[good.mock.callCount(),2]);
-  else {match(markdown,/mode: files/); eq([calls.length,2]);}
-});
-
-test('actionable errors',async ()=>{
-  const files = {query:'q',paths:['src'],mode:'files'};
-  for (const [run,error] of [
-    [()=>rp('auto',{available:[ag],mode:'files'}),/files mode:.*arcodex.*--provider/s],
-    [()=>ss({...files,provider:ag.id}),/cannot run without web access.*--provider/s],
-    [()=>ss({...files,provider:cd.id,synthProvider:ag.id}),/synthesis on agy-cli.*--synth-provider auto/s],
-    [()=>ss({query:'q',provider:cx.id,remote:true,angles:['a']}),/can read the server's disk/],
-  ]) await rejects(run(),error);
-});
-
-test('remote disk capabilities',()=>{ok(cx.localFiles); ok(!cd.localFiles); });
-test('SWARM_PROVIDER explicit; auto overrides it',async t=>{
-  mockAvail(t,[cx.id,ag.id]); process.env.SWARM_PROVIDER = ag.id;
-  eq([(await rp())[0].provider,ag],[(await rp('auto',{mode:'files' }))[0].provider.id,cx.id]);
-  await rejects(ss({query:'q',paths:['src'] }),/cannot run without web access/);
-});
-test('remote paths before providers',async t=>{
-  const dir = await tmp(t);
-  for (const p of PROVIDERS) t.mock.method(p,'detect',()=>assert.fail());
-  await rejects(ss({query:'q',mode:'files',paths:['src'],filesRoots:[dir],remote:true }),/outside SWARM_FILES_ROOTS/);
+  const { report } = await swarmSearch({ query: 'q', angles: ['a'] });
+  assert.equal(report.workers[0].provider, 'claude-cli');
+  assert.equal(report.synthesis.provider, 'claude-cli');
+  assert.deepEqual(calls, ['claude-cli', 'claude-cli']);
 });

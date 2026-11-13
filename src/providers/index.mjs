@@ -9,8 +9,18 @@ import { googleApi } from './google-api.mjs';
 import { openrouterApi } from './openrouter-api.mjs';
 import { arcodexCli } from './agentrouter-cli.mjs';
 
-// Priority: AgentRouter → agy → Claude → legacy CLI → API.
-export const PROVIDERS = [arcodexCli, agyCli, claudeCli, codexCli, geminiCli, anthropicApi, openaiApi, googleApi, openrouterApi];
+// Порядок = приоритет автовыбора. Первым идёт Claude CLI (Haiku по подписке).
+// arcodex стоит первым, но попадает в автовыбор только если установлен; тогда agy идёт перед claude (см. ROUTER_CHAIN).
+export const PROVIDERS = [arcodexCli, claudeCli, anthropicApi, codexCli, openaiApi, agyCli, googleApi, geminiCli, openrouterApi];
+
+// Цепочка при найденном arcodex: arcodex → agy → claude. Авто-фолбэки не выходят за её пределы.
+const ROUTER_CHAIN = ['arcodex-cli', 'agy-cli', 'claude-cli'];
+
+function orderRouterChain(available) {
+  if (!available.some((p) => p.id === ROUTER_CHAIN[0])) return available;
+  const rank = (p) => ROUTER_CHAIN.includes(p.id) ? ROUTER_CHAIN.indexOf(p.id) : ROUTER_CHAIN.length;
+  return [...available].sort((a, b) => rank(a) - rank(b));
+}
 
 export const FILES_PRIORITY = [
   'arcodex-cli',
@@ -27,7 +37,7 @@ export const byId = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
 export async function detectAvailable({ mode } = {}) {
   const flags = await Promise.all(PROVIDERS.map((p) => Promise.resolve(p.detect()).catch(() => false)));
   const available = PROVIDERS.filter((_, i) => flags[i]);
-  return mode === 'files' ? orderFilesProviders(available) : available;
+  return mode === 'files' ? orderFilesProviders(available) : orderRouterChain(available);
 }
 
 // Разбирает спецификацию вида "claude-cli", "codex-cli:gpt-5-mini", "mixed",
@@ -48,8 +58,10 @@ export async function resolveProviders(spec, { available, mode, remote = false, 
 
   if (raw === 'auto' || raw === '') {
     requireCompatible();
-    // arcodex first; router failures fall back to agy, then Claude.
-    return (includeFallbacks ? compatible : compatible.slice(0, 1)).map((provider) => ({ provider, model: undefined }));
+    // Фолбэки только при arcodex первым: arcodex → agy → claude из доступных, без codex/gemini и платных API.
+    const chain = includeFallbacks && compatible[0].id === ROUTER_CHAIN[0]
+      ? compatible.filter((p) => ROUTER_CHAIN.includes(p.id)) : compatible.slice(0, 1);
+    return chain.map((provider) => ({ provider, model: undefined }));
   }
 
   if (raw === 'mixed') {
