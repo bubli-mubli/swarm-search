@@ -400,13 +400,15 @@ export async function swarmSearch(opts) {
 
   // Дешёвая проверка ввода идёт раньше выбора провайдера: отказ по путям не зависит от окружения.
   if (mode === 'files') await assertPathsAllowed(paths, opts.filesRoots);
-  const pool = await resolveProviders(opts.provider, { mode });
-  // Явная модель применяется к каждому провайдеру, у которого модель не задана в спецификации.
-  let slots = pool.map((s) => ({ provider: s.provider, model: s.model ?? opts.model ?? s.provider.defaultModel }));
+  const automatic = ['', 'auto'].includes((opts.provider || process.env.SWARM_PROVIDER || 'auto').trim());
+  const selection = { mode, remote: opts.remote, includeFallbacks: automatic };
+  const pool = await resolveProviders(opts.provider, selection);
+  // В auto модель переопределяет основной слот; fallback использует модель своего провайдера.
+  let slots = pool.map((s, i) => ({ provider: s.provider, model: s.model ?? ((!automatic || i === 0) ? opts.model : undefined) ?? s.provider.defaultModel }));
   if (mode === 'files') {
     // В шардах код и конфиги пользователя: провайдер, у которого веб не выключается, стал бы каналом утечки.
     const offline = slots.filter((s) => !s.provider.webAlwaysOn);
-    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access; choose --provider claude-cli, codex-cli or gemini-cli`);
+    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access; choose --provider arcodex-cli, claude-cli, codex-cli or gemini-cli`);
     if (offline.length < slots.length) progress(`files mode: skipping ${slots.filter((s) => s.provider.webAlwaysOn).map((s) => s.provider.id).join(', ')} (web access cannot be disabled)`);
     slots = offline;
   }
@@ -417,12 +419,15 @@ export async function swarmSearch(opts) {
     if (sandboxed.length < slots.length) progress(`remote client: skipping ${slots.filter((s) => s.provider.localFiles).map((s) => s.provider.id).join(', ')} (can read the server's disk)`);
     slots = sandboxed;
   }
-  const pick = (i) => slots[i % slots.length];
+  const pick = (i) => slots[automatic ? 0 : i % slots.length];
 
+  const synthAutomatic = opts.synthProvider ? ['', 'auto'].includes(opts.synthProvider.trim()) : automatic;
+  const synthPool = opts.synthProvider
+    ? await resolveProviders(opts.synthProvider, { ...selection, includeFallbacks: synthAutomatic }) : slots;
   const synth = opts.synthProvider
-    ? (await resolveProviders(opts.synthProvider, { mode }))[0]
+    ? { ...synthPool[0] }
     : { provider: slots[0].provider, model: slots[0].model };
-  if (mode === 'files' && synth.provider.webAlwaysOn) throw new Error(`files mode: synthesis on ${synth.provider.id} cannot run without web access`);
+  if (mode === 'files' && synth.provider.webAlwaysOn) throw new Error(`files mode: synthesis on ${synth.provider.id} cannot run without web access; choose --synth-provider auto or an offline provider`);
   if (opts.remote && synth.provider.localFiles) throw new Error(`remote clients: synthesis on ${synth.provider.id} can read the server's disk`);
   synth.model = opts.synthModel ?? synth.model ?? synth.provider.defaultModel;
 
@@ -463,6 +468,38 @@ export async function swarmSearch(opts) {
     throw new Error(`files mode: all offline providers failed; check installation, login or quota.\n${reasons.join('\n')}`);
   };
 
+  const complete = async (candidates, request, label, worker = false) => {
+    if (mode === 'files') return call(candidates[0], request, label);
+    for (let i = 0; i < candidates.length; i++) {
+      throwIfCancelled();
+      const slot = candidates[i];
+      let res, error;
+      try {
+        res = await call(slot, request, label);
+        res = { ...res, provider: slot.provider.id, model: slot.model, ...(i ? { retriedFrom: candidates[0].provider.id } : {}) };
+        if (res.text?.trim()) return res;
+        error = new Error('empty response');
+      } catch (err) {
+        if (signal?.aborted || !isRetryable(err)) throw err;
+        error = err;
+      }
+      if (i + 1 === candidates.length) {
+        if (res) return res;
+        throw error;
+      }
+      serviceCalls.push(res || { error });
+      if (error.status === 429 || /rate.?limit|too many requests|\b429\b/i.test(error.message)) {
+        await new Promise(r => setTimeout(r, DEFAULTS.retryBackoffMs));
+      }
+      throwIfCancelled();
+      if (worker && i === 0) retried += 1;
+      progress(`${label}: ${slot.provider.id} failed (${error.message.slice(0, 80)}), retrying on ${candidates[i + 1].provider.id}`);
+    }
+  };
+  const synthCandidates = [synth, ...synthPool.filter(s => s.provider.id !== synth.provider.id &&
+    (mode !== 'files' || !s.provider.webAlwaysOn) && (!opts.remote || !s.provider.localFiles))
+    .slice(0, synthAutomatic ? undefined : 1).map(s => ({ provider: s.provider, model: s.model ?? s.provider.defaultModel }))];
+
   // Запускает список заданий на воркерах и превращает результаты в отчёты.
   const runJobs = async (jobs, concurrency, stage) => {
     const tasks = jobs.map((job, i) => async () => {
@@ -473,28 +510,10 @@ export async function swarmSearch(opts) {
         retried += 1;
         return { ...res, retriedFrom: slot.provider.id };
       }
-      let first;
-      try {
-        const res = await call(slot, job);
-        if (res.text?.trim()) return res;
-        first = { res, error: new Error('empty response') };
-      } catch (err) {
-        if (signal?.aborted || !isRetryable(err)) throw err;
-        first = { error: err };
-      }
       // Фейловер: один повтор на следующем слоте пула с другим провайдером.
       const alt = slots.map((_, k) => slots[(i + 1 + k) % slots.length]).find((s) => s.provider.id !== slot.provider.id);
-      if (!alt) {
-        if (first.res) return first.res;
-        throw first.error;
-      }
-      if (first.error?.status === 429 || /\b429\b|rate.?limit|too many requests/i.test(first.error?.message || '')) {
-        await new Promise((r) => setTimeout(r, DEFAULTS.retryBackoffMs));
-      }
-      throwIfCancelled();
-      retried += 1;
-      progress(`${stage} worker ${i + 1}: ${slot.provider.id} failed (${first.error.message.slice(0, 80)}), retrying on ${alt.provider.id}`);
-      return { ...(await call(alt, job)), retriedFrom: slot.provider.id };
+      return complete(automatic ? slots : [slot, ...(alt ? [alt] : [])],
+        { system: job.system, prompt: job.prompt, web: job.web }, `${stage} worker ${i + 1}`, true);
     });
     let done = 0;
     const results = await runPool(
@@ -570,15 +589,14 @@ export async function swarmSearch(opts) {
         : `First decide how many genuinely independent angles this question has, from 1 to ${cap}. ` +
           `A narrow factual question (one version, one date, one definition) has 1. A comparison of several options, or a "state of X" question, has one per option or facet. ` +
           `Return exactly that many sub-questions, no padding.`;
-      const plan = await slots[0].provider
-        .complete({
+      const plan = await complete(automatic ? slots : slots.slice(0, 1), {
           system: PLANNER_SYSTEM,
           prompt: `Question: ${query}\n\n${sizing} Same language as the question.`,
           model: slots[0].model,
           web: false,
           timeoutMs,
           signal,
-        })
+        }, 'planning')
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
       serviceCalls.push(plan);
@@ -615,7 +633,7 @@ export async function swarmSearch(opts) {
     if (round2Mode === 'gaps') {
       const maxFollowups = Math.min(4, Math.max(1, Math.ceil(useful1.length / 2)));
       progress(`round 2: auditing ${useful1.length} reports for gaps and conflicts`);
-      const audit = await call(synth, {
+      const audit = await complete(synthCandidates, {
           system: GAPS_SYSTEM,
           prompt: `Original question: ${query}\nMax follow-ups: ${maxFollowups}\n\n${useful1.map((r) => reportBlock(r)).join('\n\n')}`,
           model: synth.model,
@@ -698,7 +716,7 @@ export async function swarmSearch(opts) {
     (useful2.length ? `\n\n## Round 2 (${round2Mode === 'gaps' ? 'gap-filling follow-ups' : 'cross-critique'})\n\n${useful2.map((r) => reportBlock(r, round2Mode === 'gaps' ? 'Follow-up' : 'Critique')).join('\n\n')}` : '') +
     (failed.length ? `\n\nFailed workers: ${failed.map((r) => r.id).join(', ')} (mention that coverage is partial).` : '') +
     (ranking?.dropped ? `\n\n${ranking.dropped} of ${ranking.total} files were ranked as least relevant and not read (mention that coverage is partial).` : '');
-  const synthesis = await call(synth, { system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, web: false }, 'synthesis');
+  const synthesis = await complete(synthCandidates, { system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, web: false }, 'synthesis');
   serviceCalls.push(synthesis);
   const { markdown: answer, check: sourceCheck } = verifySources(synthesis.text.trim(), allReports);
   const usage = summarizeUsage([...serviceCalls, ...allReports], useful1.length + useful2.length);

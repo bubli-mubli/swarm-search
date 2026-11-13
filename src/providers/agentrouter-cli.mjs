@@ -1,0 +1,49 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { hasBinary, runProcess, mergeSystem, ProviderError } from './base.mjs';
+import { codexCli } from './codex-cli.mjs';
+
+const HTML_PAGE = /^\s*(?:<!doctype\s+html\b|<html\b|<head\b|<body\b)/i;
+
+function routerError(provider, error) {
+  const d = `${error.message || ''}\n${error.stderr || ''}`;
+  let reason = error.message || 'unknown error', status = error.status;
+  if (/rate.?limit|too many requests|\b429\b/i.test(d)) {
+    reason = 'AgentRouter rate limit exceeded'; status = 429;
+  } else if (/<!doctype\s+html\b|<html\b|<head\b|<body\b|captcha|cloudflare|\bWAF\b|cf-chl|HTTP\s*403\b/i.test(d)) {
+    reason = 'AgentRouter returned an HTML/WAF captcha page; try the next provider'; status = 503;
+  } else if (/reconnecting\.{0,3}\s*\d+\s*\/\s*\d+|fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(d)) {
+    reason = 'AgentRouter network connection failed'; status = 503;
+  } else if (/unrecognized_model|unsupported model|tools.*reasoning_effort|reasoning_effort.*tools/i.test(d)) {
+    reason = 'AgentRouter rejected the model/tool configuration; choose a supported model with --provider arcodex-cli:model'; status = 400;
+  }
+  return new ProviderError(`${provider}: ${reason}`, { provider, status, cause: error, stderr: error.stderr });
+}
+
+export const arcodexCli = {
+  ...codexCli,
+  id: 'arcodex-cli',
+  label: 'AgentRouter Codex CLI',
+  defaultModel: process.env.SWARM_ARCODEX_MODEL ?? '',
+  detect: () => hasBinary('arcodex'),
+  buildArgs: (opts) => [...codexCli.buildArgs(opts), '--', mergeSystem(opts.system, opts.prompt ?? '')],
+  async complete({ system, prompt, model = this.defaultModel, web = false, timeoutMs, signal }) {
+    const dir = await mkdtemp(join(tmpdir(), 'swarm-arcodex-')), outFile = join(dir, 'last.md');
+    try {
+      const { stdout, stderr } = await runProcess('arcodex', this.buildArgs({ system, prompt, model, web, outFile }), { timeoutMs, signal });
+      const text = (await readFile(outFile, 'utf8').catch(() => '')).trim();
+      if (HTML_PAGE.test(text)) throw new ProviderError('HTML response instead of an answer', { stderr: text.slice(0, 500) });
+      if (!text) {
+        const error = routerError(this.id, new ProviderError('empty response', { stderr: `${stdout}\n${stderr}` }));
+        if (error.status) throw error;
+      }
+      return { text };
+    } catch (e) {
+      if (e.provider === this.id) throw e;
+      throw routerError(this.id, e);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+};
