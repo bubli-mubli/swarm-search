@@ -7,13 +7,12 @@ import { promises as dns } from 'node:dns';
 import { verifySources } from '../src/swarm.mjs';
 import { verifyWorkerSources } from '../src/web-verification.mjs';
 
-async function server(t, handler) {
+async function server(t, handler, addresses = [{ address: '93.184.216.34', family: 4 }]) {
   const requests = [];
   const fixture = createServer((req, res) => { requests.push(req.url); handler(req, res); });
   await new Promise((resolve) => fixture.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => { fixture.close(resolve); fixture.closeAllConnections(); }));
-  const address = { address: '93.184.216.34', family: 4 };
-  t.mock.method(dns, 'lookup', async () => [address]);
+  const lookupMock = t.mock.method(dns, 'lookup', async () => addresses);
   const realRequest = http.request;
   // Public DNS/URL fixture: assert the transport pins the checked IP, then dial our local server.
   // The production guard is never disabled; existing real HTTP/body assertions remain intact.
@@ -21,14 +20,25 @@ async function server(t, handler) {
     assert.equal(url.hostname, 'sources.example');
     options.lookup(url.hostname, { all: true }, (error, answers) => {
       assert.equal(error, null);
-      assert.deepEqual(answers, [address]);
+      assert.deepEqual(answers, addresses);
     });
     const target = new URL(url);
     target.hostname = '127.0.0.1';
     return realRequest(target, { ...options, lookup: undefined });
   });
-  return { base: `http://sources.example:${fixture.address().port}`, requests };
+  return { base: `http://sources.example:${fixture.address().port}`, requests, lookupMock };
 }
+
+test('FAILS_ON_OLD: native fetch retains all checked public DNS addresses without resolving again', async (t) => {
+  const { base, requests, lookupMock } = await server(t, (req, res) => res.end('Exact quote'), [
+    { address: '93.184.216.34', family: 4 },
+    { address: '2606:4700:4700::1111', family: 6 },
+  ]);
+  const checked = await verifyWorkerSources(`- Fact (${base}/article) — Quote: "Exact quote"`);
+  assert.equal(checked.sourceVerification[0].verified, 'yes');
+  assert.deepEqual(requests, ['/article']);
+  assert.equal(lookupMock.mock.callCount(), 1);
+});
 
 test('only an actual HTTP 200 with the worker quote grants VERIFIED=yes', async (t) => {
   const { base, requests } = await server(t, (req, res) => {
