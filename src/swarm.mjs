@@ -1,6 +1,6 @@
 // Пайплайн swarm search: план → параллельные воркеры → (второй раунд) → синтез итога.
 import { resolveProviders, detectAvailable } from './providers/index.mjs';
-import { collectFiles, buildShards, rankFiles } from './corpus.mjs';
+import { collectFiles, assertPathsAllowed, buildShards, rankFiles } from './corpus.mjs';
 import { randomBytes } from 'node:crypto';
 
 export const DEFAULTS = {
@@ -398,6 +398,8 @@ export async function swarmSearch(opts) {
   const mode = opts.mode && opts.mode !== 'auto' ? opts.mode : paths.length ? 'files' : 'web';
   const progress = (msg) => opts.onProgress?.(msg);
 
+  // Дешёвая проверка ввода идёт раньше выбора провайдера: отказ по путям не зависит от окружения.
+  if (mode === 'files') await assertPathsAllowed(paths, opts.filesRoots);
   const pool = await resolveProviders(opts.provider, { mode });
   // Явная модель применяется к каждому провайдеру, у которого модель не задана в спецификации.
   let slots = pool.map((s) => ({ provider: s.provider, model: s.model ?? opts.model ?? s.provider.defaultModel }));
