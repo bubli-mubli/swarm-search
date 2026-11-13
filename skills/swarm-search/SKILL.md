@@ -49,5 +49,9 @@ Before calling, tell the user in one line that a swarm search is running and may
 Return the tool output verbatim; it is already formatted. Never restate the findings without the
 `[n]` references — the sources are the point.
 
+For web sources, `VERIFIED=yes` means code fetched HTTP 200 and found the worker's exact quote
+in the page body. `VERIFIED=unverified` includes a reason (`no_fetch`, `http_<code>` or
+`quote_not_found`); preserve it and do not present that source's claims as checked facts.
+
 If the tool answers "No LLM provider available", run `swarm_providers` and relay which CLI/API key
 the user needs to set up.

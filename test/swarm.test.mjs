@@ -553,8 +553,15 @@ test('verifySources: refs must come from worker reports, [n] must match the Sour
   ].join('\n');
   const { markdown, check } = verifySources(text, reports);
   assert.equal(check.total, 5);
-  assert.equal(check.verified, 4);
-  assert.deepEqual(check.unverified, [{ n: 3, refs: ['https://invented.example/z'] }]);
+  // URL presence alone no longer verifies a source; file refs still use the existing range check.
+  assert.equal(check.verified, 1);
+  assert.deepEqual(check.unverified, [
+    { n: 1, refs: ['https://real.example/a'] },
+    { n: 3, refs: ['https://invented.example/z'] },
+    { n: 4, refs: ['https://r2.example/'] },
+    { n: 5, refs: ['https://real.example/a'] },
+  ]);
+  assert.ok(check.verification.every((e) => e.reason === 'no_fetch'));
   assert.match(markdown, /3\. https:\/\/invented\.example\/z — \*\*source not found in worker reports\*\*/);
   assert.doesNotMatch(markdown, /2\. src\/x\.mjs:12 —/);
   assert.deepEqual(check.unusedRefs, [5]);
@@ -580,7 +587,7 @@ test('verifySources: refs must come from worker reports, [n] must match the Sour
   assert.match(prefix.markdown, /refs in the text not found in worker reports: https:\/\/ex\.com\/a/);
 });
 
-test('swarmSearch marks invented sources and counts verified ones in the footer', async () => {
+test('swarmSearch marks invented sources and counts no-fetch URLs as unverified in the footer', async () => {
   const { byId } = await import('../src/providers/index.mjs');
   byId.fake = {
     id: 'fake', family: 'fake', defaultModel: 'm', detect: () => true,
@@ -592,10 +599,11 @@ test('swarmSearch marks invented sources and counts verified ones in the footer'
   };
   try {
     const { markdown, report } = await swarmSearch({ query: 'q', provider: 'fake', workers: 1 });
-    assert.equal(report.sourceCheck.verified, 1);
+    assert.equal(report.sourceCheck.verified, 0);
     assert.equal(report.sourceCheck.total, 2);
     assert.match(markdown, /made-up\.example — \*\*source not found in worker reports\*\*/);
-    assert.match(markdown, /sources traced to worker reports 1\/2/);
+    assert.match(markdown, /sources traced to worker reports 0\/2/);
+    assert.match(markdown, /VERIFIED=unverified \(no_fetch\)/);
   } finally {
     delete byId.fake;
   }

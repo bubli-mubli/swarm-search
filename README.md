@@ -86,8 +86,14 @@ The MCP tool output starts with a note that the content was compiled from untrus
   `path:line` is marked "no URL or path:line, cannot verify" and counts as unverified. Every `[n]`
   in the text must be in the list and vice versa, mismatches are listed in a "Source check" line.
   The footer shows `sources traced to worker reports k/n`, details are in `report.sourceCheck`
-  (`bodyUnverified` lists refs from the text). This only traces sources back to worker reports:
-  URLs are not opened and it does not check that a source supports the claim.
+  (`bodyUnverified` lists unverified refs from the text). For web sources, URL presence alone is
+  insufficient: at each worker stage Node fetches sources with a same-line `Quote: "exact passage"`.
+  Only HTTP **200** and that quote found in the fetched page grant `VERIFIED=yes`.
+  Otherwise the label is `VERIFIED=unverified (no_fetch|http_<code>|quote_not_found)`;
+  missing quotes, network failures and timeouts are `no_fetch`. Model labels and claimed fetch
+  metadata are ignored. Worker receipts are in `sourceVerification`, final evidence in
+  `report.sourceCheck.verification`. This confirms the quoted passage, not its interpretation.
+  Files mode keeps its existing `path:line` checks and performs no web fetches.
 - *Grounded retractions.* In `critique` a worker may move a claim to `## Retracted` only with the
   refuting source (URL or `path:line`) taken from another worker's report. Retractions without one
   are removed before synthesis, so a correct fact is not dropped just because the majority said
