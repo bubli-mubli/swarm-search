@@ -2,16 +2,32 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { swarmSearch } from '../src/swarm.mjs';
 import { byId } from '../src/providers/index.mjs';
-import { createServer } from 'node:http';
+import http, { createServer } from 'node:http';
+import { promises as dns } from 'node:dns';
 import { verifySources } from '../src/swarm.mjs';
 import { verifyWorkerSources } from '../src/web-verification.mjs';
 
 async function server(t, handler) {
   const requests = [];
-  const http = createServer((req, res) => { requests.push(req.url); handler(req, res); });
-  await new Promise((resolve) => http.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => { http.close(resolve); http.closeAllConnections(); }));
-  return { base: `http://127.0.0.1:${http.address().port}`, requests };
+  const fixture = createServer((req, res) => { requests.push(req.url); handler(req, res); });
+  await new Promise((resolve) => fixture.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => { fixture.close(resolve); fixture.closeAllConnections(); }));
+  const address = { address: '93.184.216.34', family: 4 };
+  t.mock.method(dns, 'lookup', async () => [address]);
+  const realRequest = http.request;
+  // Public DNS/URL fixture: assert the transport pins the checked IP, then dial our local server.
+  // The production guard is never disabled; existing real HTTP/body assertions remain intact.
+  t.mock.method(http, 'request', (url, options) => {
+    assert.equal(url.hostname, 'sources.example');
+    options.lookup(url.hostname, { all: true }, (error, answers) => {
+      assert.equal(error, null);
+      assert.deepEqual(answers, [address]);
+    });
+    const target = new URL(url);
+    target.hostname = '127.0.0.1';
+    return realRequest(target, { ...options, lookup: undefined });
+  });
+  return { base: `http://sources.example:${fixture.address().port}`, requests };
 }
 
 test('only an actual HTTP 200 with the worker quote grants VERIFIED=yes', async (t) => {
@@ -47,6 +63,7 @@ test('HTTP failures, non-200 success and absent quotes remain unverified with re
 });
 
 test('network failure and timeout are no_fetch; cancellation propagates', async (t) => {
+  t.mock.method(dns, 'lookup', async () => [{ address: '93.184.216.34', family: 4 }]);
   t.mock.method(globalThis, 'fetch', async (url, { signal }) => {
     if (url.endsWith('/offline')) throw new TypeError('network failure');
     return new Promise((resolve, reject) => {

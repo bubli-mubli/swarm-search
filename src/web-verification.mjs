@@ -1,5 +1,7 @@
 // Evidence is produced by Node fetch at the worker stage, never by model/CLI assertions.
-export const URL_RE = /https?:\/\/[^\s)\]>"'`<]+/g;
+import { fetchSource } from './source-fetch.mjs';
+
+export const URL_RE = /https?:\/\/(?:\[[\da-f:.]+\]|[^\s)\]>"'`<\[])+/gi;
 const receipts = new WeakSet();
 const key = (url) => url.replace(/\/+$/, '');
 const urlsIn = (text) => [...new Set((String(text).match(URL_RE) || []).map((u) => u.replace(/[.,;:!?]+$/, '')))];
@@ -67,18 +69,19 @@ export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal } =
         if (quote && (pages.has(url) || pages.size < 12) && !controller.signal.aborted) {
           if (!pages.has(url)) {
             try {
-              const response = await fetch(url, { signal: controller.signal });
+              const response = await fetchSource(url, { signal: controller.signal });
               const body = response.status === 200 ? pageText(await readBody(response)) : '';
               if (response.status !== 200) await response.body?.cancel();
               pages.set(url, { status: response.status, body });
-            } catch {
-              pages.set(url, null);
+            } catch (error) {
+              pages.set(url, error?.code === 'blocked_address' ? { reason: 'blocked_address' } : null);
             }
           }
           const page = pages.get(url);
           if (page) {
-            evidence.status = page.status;
-            if (page.status !== 200) evidence.reason = `http_${page.status}`;
+            if (page.status !== undefined) evidence.status = page.status;
+            if (page.reason) evidence.reason = page.reason;
+            else if (page.status !== 200) evidence.reason = `http_${page.status}`;
             else if (!page.body.includes(normalize(quote))) evidence.reason = 'quote_not_found';
             else {
               evidence.verified = 'yes';
