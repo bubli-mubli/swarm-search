@@ -11,17 +11,28 @@ import { openrouterApi } from './openrouter-api.mjs';
 // Порядок = приоритет автовыбора. Первым идёт Claude CLI (Haiku по подписке).
 export const PROVIDERS = [claudeCli, anthropicApi, codexCli, openaiApi, agyCli, googleApi, geminiCli, openrouterApi];
 
+export const FILES_PRIORITY = [
+  'agentrouter', // Reserved for #6.
+  'claude-cli', 'codex-cli', 'gemini-cli', 'anthropic', 'openai', 'google', 'openrouter',
+];
+
+function orderFilesProviders(available) {
+  const priority = (p) => FILES_PRIORITY.includes(p.id) ? FILES_PRIORITY.indexOf(p.id) : FILES_PRIORITY.length;
+  return [...available].sort((a, b) => priority(a) - priority(b));
+}
+
 export const byId = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
 
-export async function detectAvailable() {
+export async function detectAvailable({ mode } = {}) {
   const flags = await Promise.all(PROVIDERS.map((p) => Promise.resolve(p.detect()).catch(() => false)));
-  return PROVIDERS.filter((_, i) => flags[i]);
+  const available = PROVIDERS.filter((_, i) => flags[i]);
+  return mode === 'files' ? orderFilesProviders(available) : available;
 }
 
 // Разбирает спецификацию вида "claude-cli", "codex-cli:gpt-5-mini", "mixed",
 // "claude-cli,agy-cli" → массив {provider, model}. Пустая строка = авто.
 export async function resolveProviders(spec, { available, mode } = {}) {
-  const detected = available ?? (await detectAvailable());
+  const detected = available ?? (await detectAvailable({ mode }));
   const raw = (spec || process.env.SWARM_PROVIDER || 'auto').trim();
   // files mode: автовыбор берёт только провайдеров, у которых веб отключается (иначе агент-ловушка agy "cannot run without web access").
   const avail = mode === 'files' ? detected.filter((p) => !p.webAlwaysOn) : detected;

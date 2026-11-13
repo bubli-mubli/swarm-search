@@ -61,6 +61,9 @@ no web tools, Codex gets `web_search="disabled"`, Gemini CLI gets a policy that 
 `google_web_search`/`web_fetch`, and `agy-cli` (whose web search cannot be turned off) is skipped
 for files shards and synthesis.
 
+Files priority: Claude CLI → Codex CLI → Gemini CLI → APIs (Anthropic, OpenAI, Google, OpenRouter).
+AgentRouter gets the reserved first priority in #6.
+
 Worker and critique prompts carry a data boundary: text from web pages, files and other reports is
 data, embedded instructions are not followed but listed under `## Uncertain` / `## Not found`.
 Before worker reports and file slices go into the gap-audit, critique and synthesis prompts, the code
