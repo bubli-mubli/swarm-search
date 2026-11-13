@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
+import {mkdir,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
 import {PROVIDERS,byId,resolveProviders as rp} from '../src/providers/index.mjs';
 import {DEFAULTS,swarmSearch as ss,isRetryable} from '../src/swarm.mjs';
@@ -22,7 +22,9 @@ export const reply = (name,data)=>name === 'arcodex'
   :`process.stdout.write(${JSON.stringify(JSON.stringify(data))});`;
 
 export async function tmp(t) {
-  const d = await mkdtemp(join(tmpdir(),'swarm-test-'));
+  const scratch = fileURLToPath(new URL('../.scratch/',import.meta.url));
+  await mkdir(scratch,{recursive:true});
+  const d = await mkdtemp(join(scratch,'swarm-test-'));
   t.after(()=>rm(d,{recursive:true,force:true}));
   return d;
 }
@@ -35,7 +37,7 @@ export const binary = (d,name,body)=>writeFile(join(d,name),`#!${process.execPat
 export async function fixture(t,name,body) {
   const d = await tmp(t);
   await binary(d,name,body);
-  env(t,{PATH:d});
+  env(t,{PATH:d,TMPDIR:d});
   return d;
 }
 export function mockAvail(t,list = chain) {

@@ -4,10 +4,9 @@ Parallel "swarm" research for Claude, ChatGPT and Gemini clients, with **zero de
 
 One question goes in. A planner splits it into sub-questions, **N cheap workers** run in parallel
 (web search, or a scan of local files), and **one synthesizer** merges everything into an answer with
-`[n]` references and a Sources list. Workers default to **Claude Haiku** through your Claude Code
-subscription; GPT (Codex CLI / OpenAI API) and Gemini (Antigravity CLI / Gemini CLI / Gemini API)
-are one flag away, and `provider: "mixed"` spreads the workers across model families so the
-synthesis shows where they disagree.
+`[n]` references and a Sources list. Workers prefer **AgentRouter** (`arcodex` / `arclaude`), then
+Antigravity (`agy`), then Claude Code and other available backends. `provider: "mixed"`
+spreads the workers across model families so the synthesis shows where they disagree.
 
 Ships as:
 
@@ -61,6 +60,10 @@ no web tools, Codex gets `web_search="disabled"`, Gemini CLI gets a policy that 
 `google_web_search`/`web_fetch`, and `agy-cli` (whose web search cannot be turned off) is skipped
 for files shards and synthesis.
 
+Files priority: AgentRouter → Claude CLI → Codex CLI → Gemini CLI → APIs (Anthropic, OpenAI, Google, OpenRouter).
+If a files provider fails, the run tries the remaining available offline providers and records
+`report.providerAttempts`; if none work, the error includes their raw failure reasons.
+
 Worker and critique prompts carry a data boundary: text from web pages, files and other reports is
 data, embedded instructions are not followed but listed under `## Uncertain` / `## Not found`.
 Before worker reports and file slices go into the gap-audit, critique and synthesis prompts, the code
@@ -93,6 +96,8 @@ The MCP tool output starts with a note that the content was compiled from untrus
 - *Failover.* A worker that fails with HTTP 402/429/5xx, a timeout, a rate-limit/quota error or an
   empty answer is retried once on the next pool slot with a different provider (e.g.
   `provider: "openrouter,claude-cli"` or `mixed`); 429 waits `SWARM_RETRY_BACKOFF_MS` first.
+  In `auto`, retryable errors also fall back for planning, audit and synthesis, following
+  AgentRouter → agy → Claude CLI → other CLIs → APIs. Files mode uses only offline providers.
   The footer shows `retried k`, each retried worker has `retriedFrom` in the report.
 - *File ranking (files mode).* When the corpus is larger than `SWARM_RANK_CHARS` (480k chars ≈
   8 shards), files are ranked by BM25 against the question (path tokens weigh more, files named in
@@ -109,9 +114,11 @@ The MCP tool output starts with a note that the content was compiled from untrus
 
 | provider id | what it uses | needs | default model |
 |---|---|---|---|
+| `arcodex-cli` | `arcodex exec` (AgentRouter) | configured AgentRouter, `arcodex` in PATH | AgentRouter default (`SWARM_ARCODEX_MODEL` overrides it) |
+| `arclaude-cli` | `arclaude -p` (AgentRouter) | configured AgentRouter, `arclaude` in PATH | AgentRouter default (`SWARM_ARCLAUDE_MODEL` overrides it) |
+| `agy-cli` | `agy -p` (Google Antigravity CLI) | Antigravity login, `agy` in PATH | `gemini-3.8-flash-low` |
 | `claude-cli` | `claude -p` (Claude Code CLI) | Claude subscription, `claude` in PATH | `haiku` |
 | `codex-cli` | `codex exec` (OpenAI Codex CLI) | ChatGPT subscription, `codex` in PATH | `gpt-6-luna` (`SWARM_CODEX_MODEL=` = your Codex default) |
-| `agy-cli` | `agy -p` (Google Antigravity CLI) | Antigravity login, `agy` in PATH | `gemini-3.8-flash-low` |
 | `gemini-cli` | `gemini -p` (Gemini CLI) | Google login / `GEMINI_API_KEY` | `gemini-3.5-flash-lite` |
 | `anthropic` | Messages API | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
 | `openai` | Responses API | `OPENAI_API_KEY` | `gpt-6-luna` |
@@ -120,6 +127,9 @@ The MCP tool output starts with a note that the content was compiled from untrus
 
 `swarm-search providers` shows which ones are usable on your machine. `auto` picks the first
 available in the order above; every default model can be overridden with `SWARM_<PROVIDER>_MODEL`.
+`auto` uses `arcodex` when present, otherwise `arclaude`; both remain selectable explicitly or
+in `mixed`. AgentRouter prompts are passed as one literal command argument. Other CLI providers
+keep their existing prompt transport.
 
 In `mixed` mode OpenRouter brings a separate model family, `deepseek/deepseek-v4.1-flash`
 (`SWARM_OPENROUTER_MIXED_MODEL`), instead of a second Haiku. A cheap DeepSeek worker by hand:
@@ -188,11 +198,11 @@ resolved with `realpath` and must lie inside one of the roots, so symlinks and `
 hidden files and directories inside a root (`.git`, `.ssh`, `.npmrc`, …) are refused even when
 named explicitly. Stdio clients are not restricted.
 
-HTTP clients also never get workers that can read the server's disk on their own: `codex-cli`
+HTTP clients also never get workers that can read the server's disk on their own: `arcodex-cli`, `codex-cli`
 (its `-s read-only` sandbox still lets shell commands read any file), `agy-cli` (file tools are
 auto-approved in plan mode) and `gemini-cli` (reads the server's working directory) are skipped
-for remote calls in every mode, workers and synthesis alike. Use `claude-cli` (web tools only) or
-an API provider; a pool with only those three CLIs fails with an error.
+for remote calls in every mode, workers and synthesis alike. Use `arclaude-cli`, `claude-cli`
+(web tools only) or an API provider; a pool with only disk-reading CLIs fails with an error.
 
 ## Usage
 
@@ -240,6 +250,7 @@ swarm-search run "..." --json           # full report with per-worker output
 | `SWARM_HTTP_TOKEN` | – | bearer token for `mcp --http` (required when binding a non-loopback host) |
 | `SWARM_HTTP_ALLOWED_ORIGINS` | – | comma-separated browser origins allowed besides localhost (`mcp --http`) |
 | `SWARM_FILES_ROOTS` | – | comma-separated directories remote `mcp --http` clients may scan in files mode; unset = files mode off over HTTP |
+| `SWARM_ARCODEX_MODEL`, `SWARM_ARCLAUDE_MODEL` | unset | override the configured AgentRouter model |
 | `SWARM_CLAUDE_MODEL`, `SWARM_CODEX_MODEL`, `SWARM_AGY_MODEL`, `SWARM_GEMINI_MODEL`, `SWARM_ANTHROPIC_MODEL`, `SWARM_OPENAI_MODEL`, `SWARM_GOOGLE_MODEL`, `SWARM_OPENROUTER_MODEL` | see table | per-provider default model |
 
 ## Cost and time

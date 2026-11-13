@@ -28,11 +28,11 @@ export const arcodexCli = {
   label: 'AgentRouter Codex CLI',
   defaultModel: process.env.SWARM_ARCODEX_MODEL ?? '',
   detect: () => hasBinary('arcodex'),
-  buildArgs: (opts) => [...codexCli.buildArgs(opts), '-'],
+  buildArgs: (opts) => [...codexCli.buildArgs(opts), '--', mergeSystem(opts.system, opts.prompt ?? '')],
   async complete({ system, prompt, model = this.defaultModel, web = false, timeoutMs, signal }) {
     const dir = await mkdtemp(join(tmpdir(), 'swarm-arcodex-')), outFile = join(dir, 'last.md');
     try {
-      const { stdout, stderr } = await runProcess('arcodex', this.buildArgs({ model, web, outFile }), { input: mergeSystem(system, prompt), timeoutMs, signal });
+      const { stdout, stderr } = await runProcess('arcodex', this.buildArgs({ system, prompt, model, web, outFile }), { timeoutMs, signal });
       const text = (await readFile(outFile, 'utf8').catch(() => '')).trim();
       if (HTML_PAGE.test(text)) throw new ProviderError('HTML response instead of an answer', { stderr: text.slice(0, 500) });
       if (!text) {
@@ -58,11 +58,11 @@ export const arclaudeCli = {
   buildArgs(opts) {
     const args = claudeCli.buildArgs(opts);
     if (!opts.model) args.splice(args.indexOf('--model'), 2);
-    return args;
+    return [...args, '--', opts.prompt ?? ''];
   },
   async complete({ system, prompt, model = this.defaultModel, web = false, timeoutMs, signal }) {
     try {
-      const { stdout, stderr } = await runProcess('arclaude', this.buildArgs({ system, model, web }), { input: prompt, timeoutMs, signal });
+      const { stdout, stderr } = await runProcess('arclaude', this.buildArgs({ system, prompt, model, web }), { timeoutMs, signal });
       let data;
       try { data = JSON.parse(stdout); } catch {
         throw new ProviderError('could not parse JSON output', { stderr: `${stderr}\n${stdout.slice(0, 500)}` });

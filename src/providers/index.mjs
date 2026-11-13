@@ -12,17 +12,28 @@ import { arcodexCli, arclaudeCli } from './agentrouter-cli.mjs';
 // Priority: AgentRouter → agy → Claude → legacy CLI → API.
 export const PROVIDERS = [arcodexCli, arclaudeCli, agyCli, claudeCli, codexCli, geminiCli, anthropicApi, openaiApi, googleApi, openrouterApi];
 
+export const FILES_PRIORITY = [
+  'arcodex-cli', 'arclaude-cli',
+  'claude-cli', 'codex-cli', 'gemini-cli', 'anthropic', 'openai', 'google', 'openrouter',
+];
+
+function orderFilesProviders(available) {
+  const priority = (p) => FILES_PRIORITY.includes(p.id) ? FILES_PRIORITY.indexOf(p.id) : FILES_PRIORITY.length;
+  return [...available].sort((a, b) => priority(a) - priority(b));
+}
+
 export const byId = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
 
-export async function detectAvailable() {
+export async function detectAvailable({ mode } = {}) {
   const flags = await Promise.all(PROVIDERS.map((p) => Promise.resolve(p.detect()).catch(() => false)));
-  return PROVIDERS.filter((_, i) => flags[i]);
+  const available = PROVIDERS.filter((_, i) => flags[i]);
+  return mode === 'files' ? orderFilesProviders(available) : available;
 }
 
 // Разбирает спецификацию вида "claude-cli", "codex-cli:gpt-5-mini", "mixed",
 // "claude-cli,agy-cli" → массив {provider, model}. Пустая строка = авто.
 export async function resolveProviders(spec, { available, mode, remote = false, includeFallbacks = false } = {}) {
-  const avail = available ?? (await detectAvailable());
+  const avail = available ?? (await detectAvailable({ mode }));
   const raw = (spec || process.env.SWARM_PROVIDER || 'auto').trim();
   // Filter before auto selection and mixed family deduplication.
   const compatible = avail.filter((p) => (mode !== 'files' || !p.webAlwaysOn) && (!remote || !p.localFiles));

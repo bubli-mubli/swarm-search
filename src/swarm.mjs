@@ -1,6 +1,6 @@
 // Пайплайн swarm search: план → параллельные воркеры → (второй раунд) → синтез итога.
-import { resolveProviders } from './providers/index.mjs';
-import { assertPathsAllowed, collectFiles, buildShards, rankFiles } from './corpus.mjs';
+import { resolveProviders, detectAvailable } from './providers/index.mjs';
+import { collectFiles, assertPathsAllowed, buildShards, rankFiles } from './corpus.mjs';
 import { randomBytes } from 'node:crypto';
 
 export const DEFAULTS = {
@@ -217,7 +217,7 @@ const isUseful = (r) => r.ok && r.text.trim() && !/^NOTHING RELEVANT\.?$/i.test(
 export function isRetryable(err) {
   const status = Number(err?.status);
   if (status === 402 || status === 429 || status >= 500) return true;
-  return /fetch failed|ECONNRESET|ETIMEDOUT|timed out|\b(?:HTTP|status:?|code:?)\s*(?:402|429|5\d\d)\b|rate.?limit|too many requests|quota|overloaded|insufficient (?:credits|balance|funds)/i.test(
+  return /timed out|\b(?:HTTP|status:?|code:?)\s*(?:402|429|5\d\d)\b|rate.?limit|too many requests|quota|overloaded|insufficient (?:credits|balance|funds)/i.test(
     `${err?.message || ''} ${err?.stderr || ''}`,
   );
 }
@@ -398,11 +398,12 @@ export async function swarmSearch(opts) {
   const mode = opts.mode && opts.mode !== 'auto' ? opts.mode : paths.length ? 'files' : 'web';
   const progress = (msg) => opts.onProgress?.(msg);
 
-  if (mode === 'files' && opts.remote && opts.filesRoots) await assertPathsAllowed(paths, opts.filesRoots);
+  // Дешёвая проверка ввода идёт раньше выбора провайдера: отказ по путям не зависит от окружения.
+  if (mode === 'files') await assertPathsAllowed(paths, opts.filesRoots);
   const automatic = ['', 'auto'].includes((opts.provider || process.env.SWARM_PROVIDER || 'auto').trim());
   const selection = { mode, remote: opts.remote, includeFallbacks: automatic };
   const pool = await resolveProviders(opts.provider, selection);
-  // Явная модель применяется к каждому провайдеру, у которого модель не задана в спецификации.
+  // В auto модель переопределяет основной слот; fallback использует модель своего провайдера.
   let slots = pool.map((s, i) => ({ provider: s.provider, model: s.model ?? ((!automatic || i === 0) ? opts.model : undefined) ?? s.provider.defaultModel }));
   if (mode === 'files') {
     // В шардах код и конфиги пользователя: провайдер, у которого веб не выключается, стал бы каналом утечки.
@@ -434,14 +435,47 @@ export async function swarmSearch(opts) {
   // Служебные вызовы (план, аудит, синтез) — для подсчёта расхода; воркеры считаются по своим отчётам.
   const serviceCalls = [];
   let retried = 0;
+  const attempts = [];
+  const failures = new Map();
+  const fallbacks = mode === 'files' ? (await detectAvailable({ mode }))
+    .filter((p) => !p.webAlwaysOn && (!opts.remote || !p.localFiles))
+    .map((provider) => ({ provider, model: provider.defaultModel })) : [];
+
+  // Skip known failures for the rest of this run.
+  const call = async (slot, job, stage) => {
+    for (const { provider, model } of mode === 'files' ? [slot, ...slots, ...fallbacks] : [slot]) {
+      if (failures.has(provider.id)) continue;
+      throwIfCancelled();
+      try {
+        const res = await provider.complete({ ...job, model, timeoutMs, signal });
+        throwIfCancelled();
+        if (mode === 'files') {
+          if (!res.text?.trim()) throw new Error('empty response');
+          attempts.push({ stage, provider: provider.id, model, ok: true });
+        }
+        return { ...res, provider: provider.id, model };
+      } catch (err) {
+        throwIfCancelled();
+        if (mode !== 'files') throw err;
+        const attempt = { stage, provider: provider.id, model, ok: false,
+          error: String(err.message || err), stderr: err.stderr, status: err.status };
+        attempts.push(attempt);
+        failures.set(provider.id, attempt);
+        progress(`${stage}: ${provider.id} failed, trying next offline provider`);
+      }
+    }
+    const reasons = [...failures.values()].map((a) => `- ${a.provider}: ${a.error}${a.stderr ? `\n${a.stderr}` : ''}`);
+    throw new Error(`files mode: all offline providers failed; check installation, login or quota.\n${reasons.join('\n')}`);
+  };
 
   const complete = async (candidates, request, label, worker = false) => {
+    if (mode === 'files') return call(candidates[0], request, label);
     for (let i = 0; i < candidates.length; i++) {
       throwIfCancelled();
       const slot = candidates[i];
       let res, error;
       try {
-        res = await slot.provider.complete({ ...request, model: slot.model, timeoutMs, signal });
+        res = await call(slot, request, label);
         res = { ...res, provider: slot.provider.id, model: slot.model, ...(i ? { retriedFrom: candidates[0].provider.id } : {}) };
         if (res.text?.trim()) return res;
         error = new Error('empty response');
@@ -470,6 +504,12 @@ export async function swarmSearch(opts) {
   const runJobs = async (jobs, concurrency, stage) => {
     const tasks = jobs.map((job, i) => async () => {
       const slot = pick(i);
+      if (mode === 'files') {
+        const res = await call(slot, job, `${stage} worker ${i + 1}`);
+        if (res.provider === slot.provider.id) return res;
+        retried += 1;
+        return { ...res, retriedFrom: slot.provider.id };
+      }
       // Фейловер: один повтор на следующем слоте пула с другим провайдером.
       const alt = slots.map((_, k) => slots[(i + 1 + k) % slots.length]).find((s) => s.provider.id !== slot.provider.id);
       return complete(automatic ? slots : [slot, ...(alt ? [alt] : [])],
@@ -600,7 +640,7 @@ export async function swarmSearch(opts) {
           web: false,
           timeoutMs,
           signal,
-        }, 'round 2 audit')
+        }, 'audit')
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
       serviceCalls.push(audit);
@@ -677,7 +717,6 @@ export async function swarmSearch(opts) {
     (failed.length ? `\n\nFailed workers: ${failed.map((r) => r.id).join(', ')} (mention that coverage is partial).` : '') +
     (ranking?.dropped ? `\n\n${ranking.dropped} of ${ranking.total} files were ranked as least relevant and not read (mention that coverage is partial).` : '');
   const synthesis = await complete(synthCandidates, { system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, web: false }, 'synthesis');
-  Object.assign(synth, synthCandidates.find(s => s.provider.id === synthesis.provider));
   serviceCalls.push(synthesis);
   const { markdown: answer, check: sourceCheck } = verifySources(synthesis.text.trim(), allReports);
   const usage = summarizeUsage([...serviceCalls, ...allReports], useful1.length + useful2.length);
@@ -690,10 +729,15 @@ export async function swarmSearch(opts) {
     (retried ? ` · retried ${retried}` : '') +
     (ranking ? ` · ranked files: ${ranking.kept}/${ranking.total} kept, ${ranking.dropped} dropped` : '') +
     ` · sources traced to worker reports ${sourceCheck.verified}/${sourceCheck.total}` +
-    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synth.provider.id}:${synth.model} · ${elapsed}s · ${usageLine(usage)}_`;
+    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synthesis.provider}:${synthesis.model} · ${elapsed}s · ${usageLine(usage)}_`;
+
+  const attemptsNote = mode === 'files' && failures.size
+    ? '\n\nProvider attempts:\n' + attempts.map((a) =>
+      `- ${a.stage}: ${a.provider}:${a.model} — ${a.ok ? 'ok' : `${a.error}${a.stderr ? `\n${a.stderr}` : ''}`}`).join('\n')
+    : '';
 
   return {
-    markdown: answer + footer,
+    markdown: answer + attemptsNote + footer,
     report: {
       query,
       mode,
@@ -706,7 +750,8 @@ export async function swarmSearch(opts) {
       retried,
       ranking,
       sourceCheck,
-      synthesis: { provider: synth.provider.id, model: synth.model },
+      synthesis: { provider: synthesis.provider, model: synthesis.model },
+      ...(mode === 'files' ? { providerAttempts: attempts } : {}),
       elapsedSec: Number(elapsed),
       usage,
     },

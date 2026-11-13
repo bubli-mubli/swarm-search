@@ -6,12 +6,13 @@ const req = {system:'S',prompt:'P',model:'m',timeoutMs:5000};
 test('argv, read-only, web',()=>{
   const c = cx.buildArgs({...req,web:false,outFile:'/tmp/o'});
   deep([[c[0],c.includes('--ephemeral'),c.includes('read-only'),flag(c,'-m'),flag(c,'-o'),c.includes('web_search="disabled"'),c.slice(-2)],
-    ['exec',true,true,'m','/tmp/o',true,['/tmp/o','-']]]);
+    ['exec',true,true,'m','/tmp/o',true,['--',mergeSystem('S','P')]]]);
   const web = cx.buildArgs({model:'',prompt:'P',web:true,outFile:'/tmp/o'});
   ok(web.includes('web_search="live"') && !web.includes('-m'));
   const k = cl.buildArgs({...req,model:'sonnet',web:false});
   deep([[k[0],flag(k,'--model'),flag(k,'--output-format'),flag(k,'--tools'),flag(k,'--system-prompt'),k.includes('P')],
-    ['-p','sonnet','json','','S',false]]);
+    ['-p','sonnet','json','','S',true]]);
+  deep([k.slice(-2),['--','P']]);
   ok(cl.buildArgs({model:'haiku',prompt:'P',web:true}).includes('--allowedTools'));
 });
 test('router model defaults',async t=>{
@@ -26,15 +27,16 @@ for (const [name,p,other,data,want,keys] of [
   ['arclaude',cl,cx,{result:'ANSWER',usage:{input_tokens:3,cache_read_input_tokens:7,output_tokens:2},total_cost_usd:0},
     {text:'ANSWER',usage:{inputTokens:10,outputTokens:2,costUsd:0}},['ANTHROPIC_AUTH_TOKEN','ANTHROPIC_BASE_URL']],
 ]) {
-  test(`${name}: parse, stdin, env`,async t=>{
+  test(`${name}: parse, argv, env`,async t=>{
     const vals = {AGENTROUTER_POOL_TOKEN:'token',[keys[0]]:'key',[keys[1]]:'http://127.0.0.1/u'};
     const dir = await fixture(t,name,`fs.writeFileSync(process.env.TASK6_LOG,JSON.stringify([a,fs.readFileSync(0,'utf8'),Object.fromEntries(${JSON.stringify(Object.keys(vals))}.map(k=>[k,process.env[k]]))]));${reply(name, data)}${name === 'arcodex' ? fail('Reconnecting... 1/5', 0) : ''}`);
     const log = join(dir,'seen'); env(t,{TASK6_LOG:log});
     eq([await p.detect(),true],[await other.detect(),false]);
     const res = await p.complete(req),[a,input] = JSON.parse(await readFile(log,'utf8'));
     if (name === 'arcodex') eq([res.text,want]); else deep([res,want]);
-    eq([input,name === 'arcodex' ? mergeSystem('S','P') :'P']);
-    if (name === 'arcodex') eq([a.at(-1),'-']); else ok(!a.includes('P'));
+    eq([input,'']);
+    deep([a.slice(-2),['--',name === 'arcodex' ? mergeSystem('S','P') :'P']]);
+    ok(!a.includes('-'));
     if (name === 'arcodex') ok(a.includes('web_search="disabled"')); else eq([flag(a,'--system-prompt'),'S']);
     env(t,vals);
     eq([(await p.complete({prompt:'P',timeoutMs:5000})).text,'ANSWER']);
