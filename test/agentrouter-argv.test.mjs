@@ -3,10 +3,10 @@ import { test } from 'node:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { arcodexCli, arclaudeCli } from '../src/providers/agentrouter-cli.mjs';
+import { arcodexCli } from '../src/providers/agentrouter-cli.mjs';
 import { mergeSystem } from '../src/providers/base.mjs';
 
-for (const [binary, provider] of [['arcodex', arcodexCli], ['arclaude', arclaudeCli]]) {
+for (const [binary, provider] of [['arcodex', arcodexCli]]) {
   test(`${binary}: prompt is one literal argument and stdin is empty`, async (t) => {
     const scratch = fileURLToPath(new URL('../.scratch/', import.meta.url));
     await mkdir(scratch, { recursive: true });
@@ -24,9 +24,7 @@ for (const [binary, provider] of [['arcodex', arcodexCli], ['arclaude', arclaude
 import fs from 'node:fs';
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input: fs.readFileSync(0, 'utf8') }));
-${binary === 'arcodex'
-    ? "fs.writeFileSync(args[args.indexOf('-o') + 1], 'answer');"
-    : "process.stdout.write(JSON.stringify({ result: 'answer' }));"}
+fs.writeFileSync(args[args.indexOf('-o') + 1], 'answer');
 `, { mode: 0o755 });
     process.env.PATH = dir;
     process.env.TMPDIR = dir;
@@ -36,7 +34,7 @@ ${binary === 'arcodex'
       assert.equal(response.text, 'answer');
       const { args, input } = JSON.parse(await readFile(log, 'utf8'));
       assert.equal(input, '', 'AgentRouter receives the prompt through argv, without changing runProcess stdin');
-      assert.deepEqual(args.slice(-2), ['--', binary === 'arcodex' ? mergeSystem(system, prompt) : prompt]);
+      assert.deepEqual(args.slice(-2), ['--', mergeSystem(system, prompt)]);
       assert.ok(!args.includes('-'), 'no stdin prompt marker');
     }
   });

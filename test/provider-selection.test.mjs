@@ -1,15 +1,15 @@
-import {test,assert,ok,match,rejects,ss,PROVIDERS,rp,tmp,mockAvail,ids,writeServer,cx,cl,ag,cd,gm,chain,eq,deep,mockFail} from './helpers.mjs';
+import {test,assert,ok,match,rejects,ss,PROVIDERS,rp,tmp,mockAvail,ids,writeServer,cx,ag,cd,gm,chain,eq,deep,mockFail} from './helpers.mjs';
 
 test('selection: auto/mixed/files/remote',async ()=>{
-  const av = [cx,cl,ag,cd],files = {mode:'files'},remote = {...files,remote:true};
+  const av = [cx,ag,cd],files = {mode:'files'},remote = {...files,remote:true};
   for (const [spec,available,opts,want] of [
     ['auto',[ag,gm,cd],files,[{provider:gm,model:undefined}]],
     ['auto',av,{includeFallbacks:true},[cx.id,ag.id,cd.id]],
-    ['mixed',av,{},[cx.id,cl.id,ag.id]],
+    ['mixed',av,{},[cx.id,ag.id,cd.id]],
     ['mixed',[ag,gm,cd],files,[gm.id,cd.id]],
     ['auto',[cx,ag,cd],remote,[cd.id]],
-    ['auto',av,{},cx.id],['arclaude-cli:haiku',av,{},cl],
-    ['auto',[cl],files,cl.id],['auto',av,remote,cl.id],
+    ['auto',av,{},cx.id],['claude-cli:haiku',av,{},cd],
+    ['auto',[cd],files,cd.id],['auto',av,remote,cd.id],
   ]) {
     const slots = await rp(spec,{available,...opts});
     if (Array.isArray(want)) deep([typeof want[0] === 'string' ? ids(slots) :slots,want]);
@@ -18,17 +18,17 @@ test('selection: auto/mixed/files/remote',async ()=>{
 });
 
 test('priority without arcodex',async t=>{
-  const order = [...chain.slice(0,1),cl.id,...chain.slice(1),'codex-cli',gm.id,'anthropic'],en = mockAvail(t,order);
-  deep([ids(await rp('auto',{includeFallbacks:true})),order.filter(id=>id !== cl.id)]);
+  const order = [...chain,'codex-cli',gm.id,'anthropic'],en = mockAvail(t,order);
+  deep([ids(await rp('auto',{includeFallbacks:true})),order]);
   for (const id of order) {eq([(await rp('auto'))[0].provider.id,id]); en.delete(id);}
   ok(PROVIDERS.slice(PROVIDERS.findIndex(p=>p.kind === 'api')).every(p=>p.kind === 'api'));
-  for (const id of [cl.id,ag.id,cd.id,'anthropic']) en.add(id);
-  deep([ids(await rp('auto',{includeFallbacks:true})),[cl.id,ag.id,cd.id,'anthropic']]);
+  for (const id of [ag.id,cd.id,'anthropic']) en.add(id);
+  deep([ids(await rp('auto',{includeFallbacks:true})),[ag.id,cd.id,'anthropic']]);
 });
 
 test('legacy specs and models',async ()=>deep([
-  (await rp('arcodex-cli:gpt-custom,arclaude-cli:sonnet,agy-cli,claude-cli:haiku,codex-cli')).map(s=>[s.provider.id,s.model]),
-  [[cx.id,'gpt-custom'],[cl.id,'sonnet'],[ag.id,undefined],[cd.id,'haiku'],['codex-cli',undefined]],
+  (await rp('arcodex-cli:gpt-custom,agy-cli,claude-cli:haiku,codex-cli')).map(s=>[s.provider.id,s.model]),
+  [[cx.id,'gpt-custom'],[ag.id,undefined],[cd.id,'haiku'],['codex-cli',undefined]],
 ]));
 
 for (const [name,available,provider,opts] of [
@@ -53,14 +53,14 @@ for (const [name,available,provider,opts] of [
 test('actionable errors',async ()=>{
   const files = {query:'q',paths:['src'],mode:'files'};
   for (const [run,error] of [
-    [()=>rp('auto',{available:[ag],mode:'files'}),/files mode:.*arcodex.*arclaude.*--provider/s],
+    [()=>rp('auto',{available:[ag],mode:'files'}),/files mode:.*arcodex.*--provider/s],
     [()=>ss({...files,provider:ag.id}),/cannot run without web access.*--provider/s],
     [()=>ss({...files,provider:cd.id,synthProvider:ag.id}),/synthesis on agy-cli.*--synth-provider auto/s],
     [()=>ss({query:'q',provider:cx.id,remote:true,angles:['a']}),/can read the server's disk/],
   ]) await rejects(run(),error);
 });
 
-test('remote disk capabilities',()=>{ok(cx.localFiles); ok(!cl.localFiles); });
+test('remote disk capabilities',()=>{ok(cx.localFiles); ok(!cd.localFiles); });
 test('SWARM_PROVIDER explicit; auto overrides it',async t=>{
   mockAvail(t,[cx.id,ag.id]); process.env.SWARM_PROVIDER = ag.id;
   eq([(await rp())[0].provider,ag],[(await rp('auto',{mode:'files' }))[0].provider.id,cx.id]);

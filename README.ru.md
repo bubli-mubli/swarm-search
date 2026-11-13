@@ -4,9 +4,9 @@
 
 На вход один вопрос. Планировщик дробит его на подвопросы, **N дешёвых воркеров** ищут параллельно
 (в вебе или по локальным файлам), **один синтезатор** сводит всё в ответ со ссылками `[n]`
-и списком источников. Воркеры сначала выбирают **AgentRouter** (`arcodex` / `arclaude`), затем
-Антигравити (`agy`), затем Claude Code и остальные доступные бэкенды.
-`provider: "mixed"` раскидывает воркеров по разным семействам моделей, чтобы в итоге
+и списком источников. Воркеры по умолчанию — **Claude Haiku** через подписку Claude Code;
+GPT (Codex CLI / OpenAI API) и Gemini (Antigravity CLI / Gemini CLI / Gemini API) включаются одним
+флагом, а `provider: "mixed"` раскидывает воркеров по разным семействам моделей, чтобы в итоге
 было видно, где они расходятся.
 
 Поставляется как:
@@ -62,10 +62,6 @@
 `google_web_search`/`web_fetch`, а `agy-cli` (у него веб-поиск не выключается) для files-шардов
 и синтеза не берётся.
 
-Приоритет files: AgentRouter → Claude CLI → Codex CLI → Gemini CLI → API (Anthropic, OpenAI, Google, OpenRouter).
-При сбое рой пробует остальных доступных провайдеров без веба и записывает `report.providerAttempts`.
-Если не сработал ни один, ошибка содержит исходные причины отказа каждого.
-
 В промптах воркеров и критики прописана граница данных: текст страниц, файлов и чужих отчётов —
 данные, встроенные в них инструкции не выполняются, а выносятся в `## Uncertain` / `## Not found`.
 Перед тем как отчёты воркеров и куски файлов попадут в промпты аудита пробелов, критики и синтеза,
@@ -99,8 +95,6 @@
   вернувший пустой ответ, один раз повторяется на следующем слоте пула с другим провайдером
   (например, `provider: "openrouter,claude-cli"` или `mixed`); после 429 — пауза
   `SWARM_RETRY_BACKOFF_MS`. В подвале — `retried k`, у повторённого воркера в отчёте `retriedFrom`.
-  В `auto` повторяемые ошибки вызывают fallback также при планировании, аудите и синтезе:
-  AgentRouter → agy → Claude CLI → остальные CLI → API. В files используются только провайдеры без веба.
 - *Ранжирование файлов (files).* Если корпус больше `SWARM_RANK_CHARS` (480k символов ≈ 8 шардов),
   файлы ранжируются BM25 по вопросу (слова пути весят больше, названные в вопросе файлы идут
   первыми), и в шарды идут только верхние файлы в пределах бюджета. Подвал пишет
@@ -116,11 +110,9 @@
 
 | id провайдера | что использует | что нужно | модель по умолчанию |
 |---|---|---|---|
-| `arcodex-cli` | `arcodex exec` (AgentRouter) | настроенный AgentRouter, `arcodex` в PATH | из AgentRouter; переопределяется через `SWARM_ARCODEX_MODEL` |
-| `arclaude-cli` | `arclaude -p` (AgentRouter) | настроенный AgentRouter, `arclaude` в PATH | из AgentRouter; переопределяется через `SWARM_ARCLAUDE_MODEL` |
-| `agy-cli` | `agy -p` (Google Antigravity CLI) | логин Antigravity, `agy` в PATH | `gemini-3.8-flash-low` |
 | `claude-cli` | `claude -p` (Claude Code CLI) | подписка Claude, `claude` в PATH | `haiku` |
 | `codex-cli` | `codex exec` (OpenAI Codex CLI) | подписка ChatGPT, `codex` в PATH | `gpt-6-luna` (`SWARM_CODEX_MODEL=` — модель из конфига Codex) |
+| `agy-cli` | `agy -p` (Google Antigravity CLI) | логин Antigravity, `agy` в PATH | `gemini-3.8-flash-low` |
 | `gemini-cli` | `gemini -p` (Gemini CLI) | логин Google / `GEMINI_API_KEY` | `gemini-3.5-flash-lite` |
 | `anthropic` | Messages API | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
 | `openai` | Responses API | `OPENAI_API_KEY` | `gpt-6-luna` |
@@ -129,9 +121,6 @@
 
 `swarm-search providers` показывает, что доступно на машине. `auto` берёт первый доступный
 в порядке таблицы; любую модель по умолчанию можно переопределить через `SWARM_<PROVIDER>_MODEL`.
-`auto` берёт `arcodex`, если он установлен, иначе `arclaude`; оба доступны явно или через `mixed`.
-Промпт AgentRouter передаётся одним буквальным аргументом команды. Передача промптов остальным
-CLI-провайдерам сохраняется.
 
 В режиме `mixed` OpenRouter берёт отдельное семейство — `deepseek/deepseek-v4.1-flash`
 (`SWARM_OPENROUTER_MIXED_MODEL`), чтобы не дублировать Haiku. Дешёвый воркер DeepSeek
@@ -202,10 +191,10 @@ ngrok http 8787          # или: cloudflared tunnel --url http://localhost:878
 не отдаются даже при явном указании. Клиентов по stdio это не ограничивает.
 
 Кроме того, HTTP-клиенты никогда не получают воркеров, которые сами читают диск сервера:
-`arcodex-cli`, `codex-cli` (песочница `-s read-only` всё равно разрешает shell-чтение любого файла), `agy-cli`
+`codex-cli` (песочница `-s read-only` всё равно разрешает shell-чтение любого файла), `agy-cli`
 (инструменты чтения файлов в plan-режиме одобряются автоматически) и `gemini-cli` (читает рабочий
 каталог сервера) при удалённом вызове пропускаются в любом режиме — и как воркеры, и как синтез.
-Используй `arclaude-cli`, `claude-cli` (только веб-инструменты) или API-провайдера; пул только из CLI с чтением диска
+Используй `claude-cli` (только веб-инструменты) или API-провайдера; пул только из этих трёх CLI
 завершится ошибкой.
 
 ## Использование
@@ -254,7 +243,6 @@ swarm-search run "..." --json           # полный отчёт с вывод�
 | `SWARM_HTTP_TOKEN` | – | bearer-токен для `mcp --http` (обязателен при bind не на loopback) |
 | `SWARM_HTTP_ALLOWED_ORIGINS` | – | браузерные origin через запятую, разрешённые помимо localhost (`mcp --http`) |
 | `SWARM_FILES_ROOTS` | – | каталоги через запятую, которые удалённые клиенты `mcp --http` могут сканировать в files-режиме; не задано — files-режим по HTTP выключен |
-| `SWARM_ARCODEX_MODEL`, `SWARM_ARCLAUDE_MODEL` | не заданы | переопределить настроенную модель AgentRouter |
 | `SWARM_CLAUDE_MODEL`, `SWARM_CODEX_MODEL`, `SWARM_AGY_MODEL`, `SWARM_GEMINI_MODEL`, `SWARM_ANTHROPIC_MODEL`, `SWARM_OPENAI_MODEL`, `SWARM_GOOGLE_MODEL`, `SWARM_OPENROUTER_MODEL` | см. таблицу | модель провайдера по умолчанию |
 
 ## Стоимость и время

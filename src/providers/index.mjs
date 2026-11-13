@@ -7,13 +7,13 @@ import { anthropicApi } from './anthropic-api.mjs';
 import { openaiApi } from './openai-api.mjs';
 import { googleApi } from './google-api.mjs';
 import { openrouterApi } from './openrouter-api.mjs';
-import { arcodexCli, arclaudeCli } from './agentrouter-cli.mjs';
+import { arcodexCli } from './agentrouter-cli.mjs';
 
 // Priority: AgentRouter → agy → Claude → legacy CLI → API.
-export const PROVIDERS = [arcodexCli, arclaudeCli, agyCli, claudeCli, codexCli, geminiCli, anthropicApi, openaiApi, googleApi, openrouterApi];
+export const PROVIDERS = [arcodexCli, agyCli, claudeCli, codexCli, geminiCli, anthropicApi, openaiApi, googleApi, openrouterApi];
 
 export const FILES_PRIORITY = [
-  'arcodex-cli', 'arclaude-cli',
+  'arcodex-cli',
   'claude-cli', 'codex-cli', 'gemini-cli', 'anthropic', 'openai', 'google', 'openrouter',
 ];
 
@@ -41,17 +41,15 @@ export async function resolveProviders(spec, { available, mode, remote = false, 
     if (compatible.length) return;
     if (!avail.length) throw new Error(noProvidersMessage());
     if (mode === 'files' && avail.every((p) => p.webAlwaysOn)) {
-      throw new Error(`files mode: ${avail.map((p) => p.id).join(', ')} cannot run without web access; install arcodex / arclaude or choose --provider claude-cli, codex-cli or gemini-cli.`);
+      throw new Error(`files mode: ${avail.map((p) => p.id).join(', ')} cannot run without web access; install arcodex or choose --provider claude-cli, codex-cli or gemini-cli.`);
     }
-    throw new Error(`remote clients: ${avail.map((p) => p.id).join(', ')} cannot run with the required restrictions; use --provider arclaude-cli, claude-cli or an API provider`);
+    throw new Error(`remote clients: ${avail.map((p) => p.id).join(', ')} cannot run with the required restrictions; use --provider claude-cli or an API provider`);
   };
 
   if (raw === 'auto' || raw === '') {
     requireCompatible();
-    // Pick arcodex or arclaude; router failures fall back to agy, then Claude.
-    const hasArcodex = compatible.some((p) => p.id === arcodexCli.id);
-    const automatic = compatible.filter((p) => !hasArcodex || p.id !== arclaudeCli.id);
-    return (includeFallbacks ? automatic : automatic.slice(0, 1)).map((provider) => ({ provider, model: undefined }));
+    // arcodex first; router failures fall back to agy, then Claude.
+    return (includeFallbacks ? compatible : compatible.slice(0, 1)).map((provider) => ({ provider, model: undefined }));
   }
 
   if (raw === 'mixed') {
@@ -73,7 +71,7 @@ export async function resolveProviders(spec, { available, mode, remote = false, 
 export function noProvidersMessage() {
   return [
     'No LLM provider available. Install one CLI or set one API key:',
-    '  arcodex / arclaude (AgentRouter) | agy (Antigravity CLI) | claude (Claude Code CLI) | codex (OpenAI Codex CLI) | gemini (Gemini CLI)',
+    '  arcodex (AgentRouter) | agy (Antigravity CLI) | claude (Claude Code CLI) | codex (OpenAI Codex CLI) | gemini (Gemini CLI)',
     '  ANTHROPIC_API_KEY | OPENAI_API_KEY | GEMINI_API_KEY | OPENROUTER_API_KEY',
   ].join('\n');
 }

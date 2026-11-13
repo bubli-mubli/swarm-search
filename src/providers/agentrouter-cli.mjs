@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hasBinary, runProcess, mergeSystem, ProviderError } from './base.mjs';
 import { codexCli } from './codex-cli.mjs';
-import { claudeCli, claudeUsage } from './claude-cli.mjs';
 
 const HTML_PAGE = /^\s*(?:<!doctype\s+html\b|<html\b|<head\b|<body\b)/i;
 
@@ -17,7 +16,7 @@ function routerError(provider, error) {
   } else if (/reconnecting\.{0,3}\s*\d+\s*\/\s*\d+|network|fetch failed|failed to fetch|error sending request|connection|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|ENOTFOUND/i.test(d)) {
     reason = 'AgentRouter network connection failed'; status = 503;
   } else if (/unrecognized_model|unsupported model|tools.*reasoning_effort|reasoning_effort.*tools/i.test(d)) {
-    reason = 'AgentRouter rejected the model/tool configuration; choose a supported model with --provider arcodex-cli:model or arclaude-cli:model'; status = 400;
+    reason = 'AgentRouter rejected the model/tool configuration; choose a supported model with --provider arcodex-cli:model'; status = 400;
   }
   return new ProviderError(`${provider}: ${reason}`, { provider, status, cause: error, stderr: error.stderr });
 }
@@ -45,34 +44,6 @@ export const arcodexCli = {
       throw routerError(this.id, e);
     } finally {
       await rm(dir, { recursive: true, force: true });
-    }
-  },
-};
-
-export const arclaudeCli = {
-  ...claudeCli,
-  id: 'arclaude-cli',
-  label: 'AgentRouter Claude CLI',
-  defaultModel: process.env.SWARM_ARCLAUDE_MODEL ?? '',
-  detect: () => hasBinary('arclaude'),
-  buildArgs(opts) {
-    const args = claudeCli.buildArgs(opts);
-    if (!opts.model) args.splice(args.indexOf('--model'), 2);
-    return [...args, '--', opts.prompt ?? ''];
-  },
-  async complete({ system, prompt, model = this.defaultModel, web = false, timeoutMs, signal }) {
-    try {
-      const { stdout, stderr } = await runProcess('arclaude', this.buildArgs({ system, prompt, model, web }), { timeoutMs, signal });
-      let data;
-      try { data = JSON.parse(stdout); } catch {
-        throw new ProviderError('could not parse JSON output', { stderr: `${stderr}\n${stdout.slice(0, 500)}` });
-      }
-      if (data.is_error) throw new ProviderError(String(data.result || 'unknown error'), { stderr });
-      const text = String(data.result ?? '');
-      if (HTML_PAGE.test(text)) throw new ProviderError('HTML response instead of an answer', { stderr: text.slice(0, 500) });
-      return { text, usage: claudeUsage(data) };
-    } catch (e) {
-      throw routerError(this.id, e);
     }
   },
 };
