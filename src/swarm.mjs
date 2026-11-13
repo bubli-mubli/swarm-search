@@ -217,7 +217,7 @@ const isUseful = (r) => r.ok && r.text.trim() && !/^NOTHING RELEVANT\.?$/i.test(
 export function isRetryable(err) {
   const status = Number(err?.status);
   if (status === 402 || status === 429 || status >= 500) return true;
-  return /timed out|\b(?:HTTP|status:?|code:?)\s*(?:402|429|5\d\d)\b|rate.?limit|too many requests|quota|overloaded|insufficient (?:credits|balance|funds)/i.test(
+  return /timed out|\b(?:HTTP|status:?|code:?)\s*(?:402|429|5\d\d)\b|rate.?limit|too many requests|quota|resource_exhausted|overloaded|failed to start|exited with code 127|insufficient (?:credits|balance|funds)/i.test(
     `${err?.message || ''} ${err?.stderr || ''}`,
   );
 }
@@ -468,8 +468,13 @@ export async function swarmSearch(opts) {
     throw new Error(`files mode: all offline providers failed; check installation, login or quota.\n${reasons.join('\n')}`);
   };
 
+  const webDown = new Set();
+  const isUnavailable = (err) => err?.status === 429 || /quota|resource_exhausted|failed to start|exited with code 127|\b429\b/i.test(`${err?.message || ''} ${err?.stderr || ''}`);
   const complete = async (candidates, request, label, worker = false) => {
     if (mode === 'files') return call(candidates[0], request, label);
+    // Провайдер, отказавший по квоте или не запустившийся, пропускаем до конца прогона (последний кандидат остаётся).
+    const live = candidates.filter((c, k) => !webDown.has(c.provider.id) || k === candidates.length - 1);
+    if (live.length) candidates = live;
     for (let i = 0; i < candidates.length; i++) {
       throwIfCancelled();
       const slot = candidates[i];
@@ -488,6 +493,7 @@ export async function swarmSearch(opts) {
         throw error;
       }
       serviceCalls.push(res || { error });
+      if (isUnavailable(error)) webDown.add(slot.provider.id);
       if (error.status === 429 || /rate.?limit|too many requests|\b429\b/i.test(error.message)) {
         await new Promise(r => setTimeout(r, DEFAULTS.retryBackoffMs));
       }
