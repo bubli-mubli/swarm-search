@@ -233,7 +233,16 @@ test('MCP HTTP: files mode is refused for remote clients, output is marked untru
   }
 
   // С корнями путь вне корня тоже отклоняется, а ответ роя идёт с пометкой о недоверенных данных.
-  await assert.rejects(callTool('swarm_search', { query: 'q', paths: ['/etc/hosts'] }, { remote: true, filesRoots: [root] }), /outside SWARM_FILES_ROOTS/);
+  // Герметично: результат не зависит от SWARM_PROVIDER окружения (проверка путей идёт раньше выбора провайдера).
+  for (const prov of ['agy-cli', undefined]) {
+    const saved = process.env.SWARM_PROVIDER;
+    if (prov) process.env.SWARM_PROVIDER = prov; else delete process.env.SWARM_PROVIDER;
+    try {
+      await assert.rejects(callTool('swarm_search', { query: 'q', paths: ['/etc/hosts'] }, { remote: true, filesRoots: [root] }), /outside SWARM_FILES_ROOTS/);
+    } finally {
+      if (saved === undefined) delete process.env.SWARM_PROVIDER; else process.env.SWARM_PROVIDER = saved;
+    }
+  }
   const { byId } = await import('../src/providers/index.mjs');
   byId.fake = { id: 'fake', family: 'fake', defaultModel: 'm', detect: () => true, complete: async () => ({ text: '["a"]' }) };
   try {

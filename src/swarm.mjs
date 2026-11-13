@@ -1,6 +1,6 @@
 // Пайплайн swarm search: план → параллельные воркеры → (второй раунд) → синтез итога.
-import { resolveProviders } from './providers/index.mjs';
-import { collectFiles, buildShards, rankFiles } from './corpus.mjs';
+import { resolveProviders, detectAvailable } from './providers/index.mjs';
+import { collectFiles, assertPathsAllowed, buildShards, rankFiles } from './corpus.mjs';
 import { randomBytes } from 'node:crypto';
 
 export const DEFAULTS = {
@@ -398,13 +398,15 @@ export async function swarmSearch(opts) {
   const mode = opts.mode && opts.mode !== 'auto' ? opts.mode : paths.length ? 'files' : 'web';
   const progress = (msg) => opts.onProgress?.(msg);
 
-  const pool = await resolveProviders(opts.provider);
+  // Дешёвая проверка ввода идёт раньше выбора провайдера: отказ по путям не зависит от окружения.
+  if (mode === 'files') await assertPathsAllowed(paths, opts.filesRoots);
+  const pool = await resolveProviders(opts.provider, { mode });
   // Явная модель применяется к каждому провайдеру, у которого модель не задана в спецификации.
   let slots = pool.map((s) => ({ provider: s.provider, model: s.model ?? opts.model ?? s.provider.defaultModel }));
   if (mode === 'files') {
     // В шардах код и конфиги пользователя: провайдер, у которого веб не выключается, стал бы каналом утечки.
     const offline = slots.filter((s) => !s.provider.webAlwaysOn);
-    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access, choose another provider`);
+    if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access; choose --provider claude-cli, codex-cli or gemini-cli`);
     if (offline.length < slots.length) progress(`files mode: skipping ${slots.filter((s) => s.provider.webAlwaysOn).map((s) => s.provider.id).join(', ')} (web access cannot be disabled)`);
     slots = offline;
   }
@@ -418,7 +420,7 @@ export async function swarmSearch(opts) {
   const pick = (i) => slots[i % slots.length];
 
   const synth = opts.synthProvider
-    ? (await resolveProviders(opts.synthProvider))[0]
+    ? (await resolveProviders(opts.synthProvider, { mode }))[0]
     : { provider: slots[0].provider, model: slots[0].model };
   if (mode === 'files' && synth.provider.webAlwaysOn) throw new Error(`files mode: synthesis on ${synth.provider.id} cannot run without web access`);
   if (opts.remote && synth.provider.localFiles) throw new Error(`remote clients: synthesis on ${synth.provider.id} can read the server's disk`);
@@ -428,15 +430,49 @@ export async function swarmSearch(opts) {
   // Служебные вызовы (план, аудит, синтез) — для подсчёта расхода; воркеры считаются по своим отчётам.
   const serviceCalls = [];
   let retried = 0;
+  const attempts = [];
+  const failures = new Map();
+  const fallbacks = mode === 'files' ? (await detectAvailable({ mode }))
+    .filter((p) => !p.webAlwaysOn && (!opts.remote || !p.localFiles))
+    .map((provider) => ({ provider, model: provider.defaultModel })) : [];
+
+  // Skip known failures for the rest of this run.
+  const call = async (slot, job, stage) => {
+    for (const { provider, model } of mode === 'files' ? [slot, ...slots, ...fallbacks] : [slot]) {
+      if (failures.has(provider.id)) continue;
+      throwIfCancelled();
+      try {
+        const res = await provider.complete({ ...job, model, timeoutMs, signal });
+        throwIfCancelled();
+        if (mode === 'files') {
+          if (!res.text?.trim()) throw new Error('empty response');
+          attempts.push({ stage, provider: provider.id, model, ok: true });
+        }
+        return { ...res, provider: provider.id, model };
+      } catch (err) {
+        throwIfCancelled();
+        if (mode !== 'files') throw err;
+        const attempt = { stage, provider: provider.id, model, ok: false,
+          error: String(err.message || err), stderr: err.stderr, status: err.status };
+        attempts.push(attempt);
+        failures.set(provider.id, attempt);
+        progress(`${stage}: ${provider.id} failed, trying next offline provider`);
+      }
+    }
+    const reasons = [...failures.values()].map((a) => `- ${a.provider}: ${a.error}${a.stderr ? `\n${a.stderr}` : ''}`);
+    throw new Error(`files mode: all offline providers failed; check installation, login or quota.\n${reasons.join('\n')}`);
+  };
 
   // Запускает список заданий на воркерах и превращает результаты в отчёты.
   const runJobs = async (jobs, concurrency, stage) => {
-    const call = async (slot, job) => {
-      const res = await slot.provider.complete({ system: job.system, prompt: job.prompt, model: slot.model, web: job.web, timeoutMs, signal });
-      return { ...res, provider: slot.provider.id, model: slot.model };
-    };
     const tasks = jobs.map((job, i) => async () => {
       const slot = pick(i);
+      if (mode === 'files') {
+        const res = await call(slot, job, `${stage} worker ${i + 1}`);
+        if (res.provider === slot.provider.id) return res;
+        retried += 1;
+        return { ...res, retriedFrom: slot.provider.id };
+      }
       let first;
       try {
         const res = await call(slot, job);
@@ -579,15 +615,14 @@ export async function swarmSearch(opts) {
     if (round2Mode === 'gaps') {
       const maxFollowups = Math.min(4, Math.max(1, Math.ceil(useful1.length / 2)));
       progress(`round 2: auditing ${useful1.length} reports for gaps and conflicts`);
-      const audit = await synth.provider
-        .complete({
+      const audit = await call(synth, {
           system: GAPS_SYSTEM,
           prompt: `Original question: ${query}\nMax follow-ups: ${maxFollowups}\n\n${useful1.map((r) => reportBlock(r)).join('\n\n')}`,
           model: synth.model,
           web: false,
           timeoutMs,
           signal,
-        })
+        }, 'audit')
         .catch((err) => ({ text: '', error: err }));
       throwIfCancelled();
       serviceCalls.push(audit);
@@ -663,7 +698,7 @@ export async function swarmSearch(opts) {
     (useful2.length ? `\n\n## Round 2 (${round2Mode === 'gaps' ? 'gap-filling follow-ups' : 'cross-critique'})\n\n${useful2.map((r) => reportBlock(r, round2Mode === 'gaps' ? 'Follow-up' : 'Critique')).join('\n\n')}` : '') +
     (failed.length ? `\n\nFailed workers: ${failed.map((r) => r.id).join(', ')} (mention that coverage is partial).` : '') +
     (ranking?.dropped ? `\n\n${ranking.dropped} of ${ranking.total} files were ranked as least relevant and not read (mention that coverage is partial).` : '');
-  const synthesis = await synth.provider.complete({ system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, model: synth.model, web: false, timeoutMs, signal });
+  const synthesis = await call(synth, { system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, web: false }, 'synthesis');
   serviceCalls.push(synthesis);
   const { markdown: answer, check: sourceCheck } = verifySources(synthesis.text.trim(), allReports);
   const usage = summarizeUsage([...serviceCalls, ...allReports], useful1.length + useful2.length);
@@ -676,10 +711,15 @@ export async function swarmSearch(opts) {
     (retried ? ` · retried ${retried}` : '') +
     (ranking ? ` · ranked files: ${ranking.kept}/${ranking.total} kept, ${ranking.dropped} dropped` : '') +
     ` · sources traced to worker reports ${sourceCheck.verified}/${sourceCheck.total}` +
-    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synth.provider.id}:${synth.model} · ${elapsed}s · ${usageLine(usage)}_`;
+    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synthesis.provider}:${synthesis.model} · ${elapsed}s · ${usageLine(usage)}_`;
+
+  const attemptsNote = mode === 'files' && failures.size
+    ? '\n\nProvider attempts:\n' + attempts.map((a) =>
+      `- ${a.stage}: ${a.provider}:${a.model} — ${a.ok ? 'ok' : `${a.error}${a.stderr ? `\n${a.stderr}` : ''}`}`).join('\n')
+    : '';
 
   return {
-    markdown: answer + footer,
+    markdown: answer + attemptsNote + footer,
     report: {
       query,
       mode,
@@ -692,7 +732,8 @@ export async function swarmSearch(opts) {
       retried,
       ranking,
       sourceCheck,
-      synthesis: { provider: synth.provider.id, model: synth.model },
+      synthesis: { provider: synthesis.provider, model: synthesis.model },
+      ...(mode === 'files' ? { providerAttempts: attempts } : {}),
       elapsedSec: Number(elapsed),
       usage,
     },
