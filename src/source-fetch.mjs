@@ -31,7 +31,7 @@ function blocked() {
   return Object.assign(new Error('blocked_address'), { code: 'blocked_address' });
 }
 
-async function checkedAddress(url, signal) {
+async function checkedAddresses(url, signal) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw blocked();
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
   signal.throwIfAborted();
@@ -55,12 +55,12 @@ async function checkedAddress(url, signal) {
   }
   signal.throwIfAborted();
   if (!addresses.length || addresses.some(({ address }) => blockedAddress(address))) throw blocked();
-  return addresses[0];
+  return addresses;
 }
 
 // Node fetch accepts an Undici dispatcher. Use built-in HTTP transports to pin the checked DNS
-// answer, retaining the original hostname for Host/TLS validation; no second DNS lookup or proxy.
-function pinnedDispatcher(url, address) {
+// answers, retaining the original hostname for Host/TLS validation; no second DNS lookup or proxy.
+function pinnedDispatcher(url, addresses) {
   return {
     dispatch(options, handler) {
       let ended = false;
@@ -70,8 +70,8 @@ function pinnedDispatcher(url, address) {
         headers: options.headers,
         agent: false,
         lookup: (_hostname, lookupOptions, callback) => {
-          if (lookupOptions.all) callback(null, [address]);
-          else callback(null, address.address, address.family);
+          if (lookupOptions.all) callback(null, addresses);
+          else callback(null, addresses[0].address, addresses[0].family);
         },
       });
       request.on('error', fail);
@@ -91,9 +91,9 @@ function pinnedDispatcher(url, address) {
 export async function fetchSource(source, { signal }) {
   let url = new URL(source);
   for (let hops = 0; ; hops++) {
-    const address = await checkedAddress(url, signal);
+    const addresses = await checkedAddresses(url, signal);
     const response = await fetch(url.href, {
-      signal, redirect: 'manual', dispatcher: pinnedDispatcher(url, address),
+      signal, redirect: 'manual', dispatcher: pinnedDispatcher(url, addresses),
     });
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get('location');
