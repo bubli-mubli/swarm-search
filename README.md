@@ -89,11 +89,14 @@ The MCP tool output starts with a note that the content was compiled from untrus
   (`bodyUnverified` lists unverified refs from the text). For web sources, URL presence alone is
   insufficient: at each worker stage Node fetches sources with a same-line `Quote: "exact passage"`.
   Only HTTP **200** and that quote found in the fetched page grant `VERIFIED=yes`.
-  Otherwise the label is `VERIFIED=unverified (no_fetch|http_<code>|quote_not_found)`;
-  missing quotes, network failures and timeouts are `no_fetch`. Model labels and claimed fetch
+  Otherwise the label is `VERIFIED=unverified (no_fetch|http_<code>|quote_not_found|blocked_address|no_fetch_files_mode)`;
+  missing quotes, network failures and timeouts are `no_fetch`. Loopback, private and link-local
+  destinations are `blocked_address`: all DNS answers are checked before connecting, connections
+  use only those checked addresses, and up to three redirects are checked separately. Model labels and claimed fetch
   metadata are ignored. Worker receipts are in `sourceVerification`, final evidence in
   `report.sourceCheck.verification`. This confirms the quoted passage, not its interpretation.
-  Files mode keeps its existing `path:line` checks and performs no web fetches.
+  Files mode keeps its existing `path:line` checks and performs no web fetches or source DNS lookups;
+  URLs in files reports remain `VERIFIED=unverified (no_fetch_files_mode)`.
 - *Grounded retractions.* In `critique` a worker may move a claim to `## Retracted` only with the
   refuting source (URL or `path:line`) taken from another worker's report. Retractions without one
   are removed before synthesis, so a correct fact is not dropped just because the majority said

@@ -50,8 +50,10 @@ Return the tool output verbatim; it is already formatted. Never restate the find
 `[n]` references — the sources are the point.
 
 For web sources, `VERIFIED=yes` means code fetched HTTP 200 and found the worker's exact quote
-in the page body. `VERIFIED=unverified` includes a reason (`no_fetch`, `http_<code>` or
-`quote_not_found`); preserve it and do not present that source's claims as checked facts.
+in the page body. `VERIFIED=unverified` includes a reason (`no_fetch`, `http_<code>`,
+`quote_not_found`, `blocked_address` or `no_fetch_files_mode`); preserve it and do not present
+that source's claims as checked facts. Internal addresses are blocked, including redirect targets.
+Files mode performs no source fetch or DNS lookup; URLs remain unverified.
 
 If the tool answers "No LLM provider available", run `swarm_providers` and relay which CLI/API key
 the user needs to set up.
