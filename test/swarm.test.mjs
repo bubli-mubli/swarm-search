@@ -748,7 +748,7 @@ test('rankFiles: relevant and named files first, budget drops the rest and says 
       const { markdown, report } = await swarmSearch({ query: 'where do we validate JWT?', paths: [dir], provider: 'fake', workers: 1 });
       assert.equal(report.ranking.dropped, cut.dropped);
       assert.match(markdown, new RegExp(`ranked files: ${cut.files.length}/4 kept, ${cut.dropped} dropped`));
-      assert.match(prompts[0], /^Query: .*\n\nFiles in your slice:\nauth\.js/);
+      assert.match(prompts[0], /^Query: .*\n\nFiles in your slice:\n<<<DATA [0-9a-f]{16} file names of shard 1>>>\nauth\.js/);
       assert.match(prompts.at(-1), /files were ranked as least relevant and not read/);
       // off — без ранжирования и без отбрасывания.
       const off = await swarmSearch({ query: 'where do we validate JWT?', paths: [dir], provider: 'fake', workers: 1, rank: 'off' });
