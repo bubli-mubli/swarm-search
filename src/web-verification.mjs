@@ -1,8 +1,9 @@
 // Evidence is produced by Node fetch at the worker stage, never by model/CLI assertions.
 import { fetchSource } from './source-fetch.mjs';
+import { responseFormat, URL_RE, PATH_LINE_RE } from './response-format.mjs';
+export { URL_RE, PATH_LINE_RE } from './response-format.mjs';
 
-export const URL_RE = /https?:\/\/(?:\[[\da-f:.]+\]|[^\s)\]>"'`<\[])+/gi;
-export const PATH_LINE_RE = /(?:[\w.@~-]+\/)+[\w.@-]+:\d+(?:[-–]\d+)?|[\w@-][\w.@-]*\.[A-Za-z]\w*:\d+(?:[-–]\d+)?/g;
+const WORKER_FORMAT = responseFormat('worker');
 const receipts = new WeakSet();
 const key = (url) => url.replace(/\/+$/, '');
 const urlsIn = (text) => [...new Set((String(text).match(URL_RE) || []).map((u) => u.replace(/[.,;:!?]+$/, '')))];
@@ -66,8 +67,7 @@ export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal, mo
     for (let i = 0; i < lines.length; i++) {
       const urls = urlsIn(lines[i]);
       // A quote belongs to the single URL on the same finding line. Never borrow another claim's quote.
-      const quoted = lines[i].match(/\bQuote:\s*(?:"([^"\n]+)"|«([^»\n]+)»|`([^`\n]+)`)/i);
-      const quote = urls.length === 1 && quoted ? (quoted[1] || quoted[2] || quoted[3]).trim() : '';
+      const { quote } = WORKER_FORMAT.parseLine(lines[i]);
       const marks = [];
       for (const url of urls) {
         const evidence = { url, quote, verified: 'unverified', reason: mode === 'files' ? 'no_fetch_files_mode' : 'no_fetch',

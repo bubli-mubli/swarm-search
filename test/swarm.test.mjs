@@ -307,7 +307,7 @@ test('swarmSearch runs plan → workers → synthesis with a fake provider', asy
       calls.push(system.slice(0, 20));
       if (system.startsWith('You split')) return { text: '["angle one","angle two"]' };
       if (system.startsWith('You are one worker')) return { text: `## Findings\n- fact about ${prompt.split('sub-question: ')[1]} (https://x)` };
-      return { text: `ANSWER built from:\n${prompt}` };
+      return { text: `ANSWER built from:\n${prompt}\n\nEvidence [1].\n## Sources\n1. https://x` };
     },
   };
   const { byId } = await import('../src/providers/index.mjs');
@@ -875,7 +875,7 @@ test('synthesis and gap audit get worker reports in data wrappers with neutraliz
       if (system.startsWith('You audit')) { seen.audit = { system, prompt }; return { text: '{"followups": []}' }; }
       if (system.includes('critique round')) { seen.critique.push(prompt); return { text: '## Confirmed\n- x (https://x)' }; }
       seen.synth = { system, prompt };
-      return { text: 'ok' };
+      return { text: 'ok [1].\n## Sources\n1. https://x' };
     },
   };
   try {

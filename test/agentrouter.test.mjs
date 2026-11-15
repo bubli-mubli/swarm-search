@@ -68,7 +68,9 @@ test('arcodex: HTML in the answer file is rejected', async (t) => {
 test('network error falls back to agy-cli, then claude-cli', async (t) => {
   await installBinary(t, 'arcodex', fail('fetch failed: ETIMEDOUT'));
   mockAvailable(t, ['arcodex-cli', 'agy-cli', 'claude-cli']);
-  const agy = t.mock.method(byId['agy-cli'], 'complete', async () => ({ text: 'Ans (https://example.org)' }));
+  const answer = ({ system }) => ({ text: system.startsWith('You are the synthesizer')
+    ? 'Ans [1].\n## Sources\n1. https://example.org' : 'Ans (https://example.org)' });
+  const agy = t.mock.method(byId['agy-cli'], 'complete', async request => answer(request));
   t.mock.method(byId['claude-cli'], 'complete', async () => assert.fail('claude is the last resort'));
   const { report } = await swarmSearch({ query: 'q', angles: ['a'] });
   assert.equal(report.workers[0].provider, 'agy-cli');
@@ -79,7 +81,8 @@ test('network error falls back to agy-cli, then claude-cli', async (t) => {
 
 test('healthy router answers every call without fallback', async (t) => {
   mockAvailable(t, ['arcodex-cli', 'agy-cli', 'claude-cli']);
-  const router = t.mock.method(arcodexCli, 'complete', async () => ({ text: 'Ans (https://example.org)' }));
+  const router = t.mock.method(arcodexCli, 'complete', async ({ system }) => ({ text: system.startsWith('You are the synthesizer')
+    ? 'Ans [1].\n## Sources\n1. https://example.org' : 'Ans (https://example.org)' }));
   t.mock.method(byId['agy-cli'], 'complete', async () => assert.fail('no fallback expected'));
   const { report } = await swarmSearch({ query: 'q', angles: ['a', 'b'] });
   assert.ok(report.workers.every((w) => w.provider === 'arcodex-cli'));
