@@ -72,7 +72,8 @@ export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal, mo
       for (const url of urls) {
         const evidence = { url, quote, verified: 'unverified', reason: mode === 'files' ? 'no_fetch_files_mode' : 'no_fetch',
           source_url: url, fetched_at: null, source_status: 'partial' };
-        if (mode !== 'files' && (status === 'unavailable' || declaredUnavailable.has(url) || /\bstatus\s*=\s*unavailable\b/i.test(lines[i]))) {
+        const unavailableMarker = /^\s*(?:[-*+]|\d+[.)])?\s*status\s*=\s*unavailable\b/i.test(lines[i]);
+        if (mode !== 'files' && (status === 'unavailable' || declaredUnavailable.has(url) || unavailableMarker)) {
           evidence.source_status = 'unavailable';
           evidence.reason = 'provider_unavailable';
         } else if (mode !== 'files' && quote && (pages.has(url) || pages.size < 12) && !controller.signal.aborted) {

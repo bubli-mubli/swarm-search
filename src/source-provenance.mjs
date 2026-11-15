@@ -18,6 +18,8 @@ export function synthesisReportText(report) {
     // A finding may span several lines. Withhold the whole list item/paragraph.
     while (start > 0 && !boundary(lines[start]) && !/^\s*#/.test(lines[start - 1])) start--;
     while (end < lines.length && !boundary(lines[end])) end++;
+    // A continuation inherits the surrounding finding's source; it is not an unrelated claim.
+    if (fact.source_url === null && report.facts.some(f => f.source_url !== null && f.line > start && f.line <= end)) continue;
     for (let i = start; i < end; i++) removed.add(i);
   }
   return lines.filter((_, i) => !removed.has(i)).join('\n').trim();

@@ -198,3 +198,25 @@ test('FAILS_ON_OLD 481: network failures and timeouts have unavailable provenanc
     assert.equal(checked.sourceVerification[0].reason, 'no_fetch'); // Legacy receipt reason.
   }
 });
+
+test('FAILS_ON_OLD 481: availability words inside a URL or quote do not declare a source unavailable', async (t) => {
+  fixture(t);
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('status=unavailable'));
+  const url = 'https://sources.example/article?status=unavailable';
+  const checked = await verifyWorkerSources(`- Public fact (${url}) — Quote: "status=unavailable"`);
+  assert.equal(checked.facts?.[0].status, 'ok');
+  assert.equal(checked.facts[0].source_url, url);
+  assert.equal(checked.sourceVerification[0].status, 200);
+  assert.equal(fetchMock.mock.callCount(), 1);
+});
+
+test('FAILS_ON_OLD 481: a supported multiline finding survives alongside an unavailable finding', async (t) => {
+  const text = workerText.replace('\n- CONTROL_FACT', '\n  Context belonging to the public finding.\n- CONTROL_FACT');
+  const { options, prompts } = fixture(t, { text });
+  const { markdown } = await swarmSearch(options);
+  const prompt = prompts.find(p => p.system.startsWith('You are the synthesizer')).prompt;
+  assert.ok(prompt.includes(`Public fact (${available})`));
+  assert.ok(prompt.includes('Context belonging to the public finding.'));
+  assert.doesNotMatch(markdown, /CONTROL_FACT_481/);
+  assert.match(markdown, /incomplete/i);
+});
