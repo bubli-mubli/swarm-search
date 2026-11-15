@@ -33,6 +33,8 @@ Minimal: `swarm_search({ query })`. Useful options:
 | arg | meaning |
 |---|---|
 | `paths` | directories/files to scan → files mode |
+| `mode: "serp"` | first organic search positions, or explicit `unavailable` with a reason; skips planner and synthesis |
+| `top_n` / `region` | SERP: number of positions (1–100, default 10) and provider region, e.g. `RU`; omitted region may be unknown |
 | `workers` | omit → auto: the planner decides how many independent angles the question has (1–8). Pass a number only when the user asked for one |
 | `rounds` | `1` (default) or `2`. Use 2 when the question is contested, the answer depends on conflicting sources, or `provider` is `mixed` |
 | `round2` | `gaps` (default, cheap: auditor + a few follow-up workers) or `critique` (every worker reviews the others; N extra calls) |
@@ -54,6 +56,12 @@ in the page body. `VERIFIED=unverified` includes a reason (`no_fetch`, `http_<co
 `quote_not_found`, `blocked_address` or `no_fetch_files_mode`); preserve it and do not present
 that source's claims as checked facts. Internal addresses are blocked, including redirect targets.
 Files mode performs no source fetch or DNS lookup; URLs remain unverified.
+
+For requests for the first N organic search results, use `mode: "serp"`. Preserve native
+`position`, full `url`, `title`, `fetched_at` and search region from `structuredContent.serp`.
+Current LLM adapters return `unavailable` because they do not expose native SERP positions;
+never number domains or citations as a substitute. A `partial` web result means page sources
+are missing or incomplete; preserve this status and the full page URLs without shortening paths.
 
 If the tool answers "No LLM provider available", run `swarm_providers` and relay which CLI/API key
 the user needs to set up.

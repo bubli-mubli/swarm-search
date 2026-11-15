@@ -37,6 +37,7 @@ export const googleApi = {
       .map((u, i) => `[${i + 1}] ${u}`);
     return {
       text: sources.length ? `${text}\n\nSources:\n${sources.join('\n')}` : text,
+      sources: chunks.filter(c => c.web?.uri).map(c => ({ url: c.web.uri, title: c.web.title || '' })),
       usage: {
         inputTokens: data.usageMetadata?.promptTokenCount,
         outputTokens: data.usageMetadata?.candidatesTokenCount,
