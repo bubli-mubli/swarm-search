@@ -30,7 +30,7 @@ fs.appendFileSync(${JSON.stringify(log)}, id + '\\n');
 if (!input.includes('8787')) throw new Error('missing corpus/answer on stdin');
 if (id === 'agy') throw new Error('files must never invoke agy');
 ${behaviors[id] || ''}
-const text = stage === 'audit' ? '{"followups": []}' : 'Port 8787 (server.mjs:1)';
+const text = stage === 'audit' ? '{"followups": []}' : stage === 'synthesis' ? 'Port 8787 [1].\\n## Sources\\n1. server.mjs:1' : 'Port 8787 (server.mjs:1)';
 if (id === 'codex') fs.writeFileSync(args[args.indexOf('-o') + 1], text);
 else process.stdout.write(JSON.stringify(id === 'claude' ? { result: text } : { response: text }));
 `, { mode: 0o755 });
