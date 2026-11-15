@@ -33,7 +33,8 @@ test('FAILS_ON_OLD 486: worker retains page paths supplied as provider sources',
   const { report, markdown } = await swarmSearch(options);
   assert.ok(report.workers[0].text.includes(page));
   assert.deepEqual(report.workers[0].sources, [{ url: page, title: 'Start here' }]);
-  assert.equal(report.workers[0].status, 'ok');
+  assert.equal(report.workers[0].status, 'partial'); // URL retained, but no quote was fetched.
+  assert.ok(report.workers[0].facts.some(f => f.source_url === page && f.status === 'partial' && f.fetched_at === null && f.reason === 'no_fetch'));
   assert.ok(markdown.includes(page));
 });
 
@@ -64,7 +65,10 @@ test('web text URLs preserve paths, query strings and fragments in worker source
   fake(t, { async complete() { return { text: `A useful report (${page})` }; } });
   const { report } = await swarmSearch(options);
   assert.deepEqual(report.workers[0].sources, [{ url: page, title: '' }]);
-  assert.equal(report.workers[0].status, 'ok');
+  assert.equal(report.workers[0].status, 'partial'); // URL syntax alone cannot confirm a fact.
+  assert.equal(report.workers[0].facts[0].source_url, page);
+  assert.equal(report.workers[0].facts[0].fetched_at, null);
+  assert.equal(report.workers[0].facts[0].reason, 'no_fetch');
 });
 
 test('API adapters retain page URL/title metadata without treating citation order as SERP rank', async (t) => {

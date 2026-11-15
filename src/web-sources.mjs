@@ -18,7 +18,7 @@ export function workerSources(result) {
   const sourceIssues = [];
   const inText = new Set((text.match(URL_RE) || []).map(u => u.replace(/[.,;:!?]+$/, '')));
   const add = (source) => {
-    const url = typeof source === 'string' ? source : source?.url;
+    const url = typeof source === 'string' ? source : source?.source_url ?? source?.url;
     const reason = sourceUrlIssue(url);
     if (reason === 'invalid_source_url') {
       sourceIssues.push({ url: typeof url === 'string' ? url : null, reason });
@@ -28,6 +28,7 @@ export function workerSources(result) {
     sources.set(url, { url, title: (typeof source?.title === 'string' ? source.title : '') || previous?.title || '' });
   };
   for (const source of Array.isArray(result.sources) ? result.sources : []) add(source);
+  if (result.source_url) add(result.source_url);
   for (const url of inText) add(url);
   const missing = [...sources.keys()].filter(url => !inText.has(url));
   if (missing.length) text += `\n\nProvider sources:\n${missing.map(url => `- ${url}`).join('\n')}`;
