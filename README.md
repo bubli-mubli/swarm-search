@@ -262,7 +262,27 @@ swarm-search run "state of WebGPU in 2026: browser support, frameworks, gotchas"
 swarm-search run "where do we validate JWT?" --paths src,server --provider codex-cli
 swarm-search run "is Bun ready for production?" --provider mixed --rounds 2 --round2 critique --synth-provider claude-cli:sonnet
 swarm-search run "..." --json           # full report with per-worker output
+swarm-search doctor                   # free installation/config/network diagnostics
 ```
+
+`doctor` prints one line per check: `ok`, `warn`, `not configured` or `fail`, with a
+`fix:` command for anything needing attention. It checks Node against `package.json`
+engines, Claude Code plugin registration and files, the bundled MCP config and entry
+point, provider configuration/reachability, and cache/temp directory permissions.
+Only `fail` sets exit code 1; missing optional plugins, CLIs or API keys exit 0.
+
+API probes open TCP/TLS connections in parallel (1.5-second timeout each), without
+sending HTTP requests or keys. CLI checks inspect executable files without launching
+them. Login, key validity, quota and MCP client activation are not verified. Network
+probes use direct connections; a failed probe suggests restoring DNS/network access
+and a `curl -I` command to investigate. No configuration or cache files are written.
+
+`--mcp-config /path/to/config.json` checks another stdio JSON config (`mcpServers`
+or the plugin's direct format). `--cache-dir /path/to/dir` checks another existing
+directory. By default the cache check uses the workers' actual temp directory
+(`os.tmpdir()`, including `TMPDIR`); there is no separate persistent swarm cache.
+These flags only affect diagnostics. For example, to use a writable worker directory:
+`mkdir -p .swarm-cache && export TMPDIR="$PWD/.swarm-cache"`.
 
 ### Environment
 
