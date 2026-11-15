@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CLI: swarm-search run|mcp|providers|install
+// CLI: swarm-search run|mcp|providers|install|doctor
 import { swarmSearch } from '../src/swarm.mjs';
 import { serveStdio, serveHttp, parseRoots } from '../src/mcp.mjs';
 import { detectAvailable, PROVIDERS } from '../src/providers/index.mjs';
@@ -24,6 +24,8 @@ Usage:
                                         MCP over Streamable HTTP (ChatGPT connectors, remote clients);
                                         files mode is off unless roots are given (or SWARM_FILES_ROOTS)
   swarm-search providers                Show which providers are usable on this machine
+  swarm-search doctor [--cache-dir dir] [--mcp-config file]
+                                        Free, read-only diagnostics; exits 1 only for fail
   swarm-search install <client> [--write]
                                         Print (or with --write apply) config for: ${CLIENTS.join(', ')}
 
@@ -58,6 +60,16 @@ async function main() {
   const { flags, positional } = parseArgs(rest);
 
   switch (cmd) {
+    case 'doctor': {
+      const { diagnose, doctorExitCode, formatCheck } = await import('../src/doctor.mjs');
+      const invalid = positional.length || Object.keys(flags).some(key => !['cache-dir', 'mcp-config'].includes(key));
+      const checks = invalid
+        ? [{ status: 'fail', name: 'options', detail: 'expected doctor [--cache-dir dir] [--mcp-config file]', fix: 'swarm-search doctor' }]
+        : await diagnose({ cacheDir: flags['cache-dir'], mcpConfig: flags['mcp-config'] });
+      for (const check of checks) console.log(formatCheck(check));
+      process.exitCode = doctorExitCode(checks);
+      return;
+    }
     case 'mcp': {
       if (flags.http) {
         serveHttp({
