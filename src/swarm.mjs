@@ -1,5 +1,5 @@
 // Пайплайн swarm search: план → параллельные воркеры → (второй раунд) → синтез итога.
-import { resolveProviders, detectAvailable } from './providers/index.mjs';
+import { resolveProviders, detectAvailable, byId } from './providers/index.mjs';
 import { collectFiles, assertPathsAllowed, buildShards, rankFiles } from './corpus.mjs';
 import { randomBytes } from 'node:crypto';
 import { URL_RE, verifyWorkerSources, sourceEvidence, stripVerification, verificationMark } from './web-verification.mjs';
@@ -421,17 +421,42 @@ export async function swarmSearch(opts) {
 
   // Дешёвая проверка ввода идёт раньше выбора провайдера: отказ по путям не зависит от окружения.
   if (mode === 'files') await assertPathsAllowed(paths, opts.filesRoots);
-  const automatic = ['', 'auto'].includes((opts.provider || process.env.SWARM_PROVIDER || 'auto').trim());
+  const explicitProvider = Boolean(opts.provider && !['', 'auto'].includes(opts.provider.trim()));
+  const automatic = !explicitProvider;
   const selection = { mode, remote: opts.remote, includeFallbacks: automatic };
   const pool = await resolveProviders(opts.provider, selection);
   // В auto модель переопределяет основной слот; fallback использует модель своего провайдера.
   let slots = pool.map((s, i) => ({ provider: s.provider, model: s.model ?? ((!automatic || i === 0) ? opts.model : undefined) ?? s.provider.defaultModel }));
+  const skippedProviders = [];
   if (mode === 'files') {
     // В шардах код и конфиги пользователя: провайдер, у которого веб не выключается, стал бы каналом утечки.
     const offline = slots.filter((s) => !s.provider.webAlwaysOn);
     if (!offline.length) throw new Error(`files mode: ${slots.map((s) => s.provider.id).join(', ')} cannot run without web access; choose --provider arcodex-cli, claude-cli, codex-cli or gemini-cli`);
-    if (offline.length < slots.length) progress(`files mode: skipping ${slots.filter((s) => s.provider.webAlwaysOn).map((s) => s.provider.id).join(', ')} (web access cannot be disabled)`);
+    if (offline.length < slots.length) {
+      for (const s of slots.filter((s) => s.provider.webAlwaysOn)) {
+        skippedProviders.push({ id: s.provider.id, provider: s.provider.id, reason: 'web access cannot be disabled' });
+      }
+    }
     slots = offline;
+
+    if (!explicitProvider) {
+      const rawDefault = (process.env.SWARM_PROVIDER || '').trim();
+      const envIds = rawDefault ? rawDefault.split(',').map((p) => p.trim().split(':')[0]) : [];
+      const available = await detectAvailable();
+      const candidates = [...new Set([...available.map((p) => p.id), ...envIds])];
+      for (const id of candidates) {
+        const p = byId[id];
+        if (p?.webAlwaysOn && !skippedProviders.some((s) => s.id === id)) {
+          skippedProviders.push({ id, provider: id, reason: 'web access cannot be disabled' });
+        }
+      }
+      if (skippedProviders.length) {
+        progress(`files mode: skipping ${skippedProviders.map((s) => s.id).join(', ')} (web access cannot be disabled)`);
+        progress(`files mode: provider ${slots[0].provider.id} chosen (skipped ${skippedProviders.map((s) => `${s.id}: ${s.reason}`).join(', ')})`);
+      } else {
+        progress(`files mode: provider ${slots[0].provider.id} chosen`);
+      }
+    }
   }
   if (opts.remote) {
     // Удалённый клиент (HTTP): CLI с доступом к локальному диску прочитал бы ~/.ssh или ~/.aws по просьбе из запроса или страницы.
@@ -753,13 +778,18 @@ export async function swarmSearch(opts) {
 
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
   const familiesUsed = [...new Set(allReports.filter((r) => r.ok).map((r) => `${r.provider}${r.model ? `:${r.model}` : ''}`))];
+  const skippedNote = mode === 'files' && skippedProviders.length
+    ? ` · skipped: ${skippedProviders.map((s) => `${s.id} (${s.reason})`).join(', ')}`
+    : '';
   const footer =
     `\n\n---\n_swarm-search · mode: ${mode} · workers: ${round1.length} (${plannedBy}; ${useful1.length} useful, ${round1.filter((r) => !r.ok).length} failed)` +
     (rounds === 2 ? ` · round 2: ${round2Note}` : '') +
     (retried ? ` · retried ${retried}` : '') +
     (ranking ? ` · ranked files: ${ranking.kept}/${ranking.total} kept, ${ranking.dropped} dropped` : '') +
     ` · sources traced to worker reports ${sourceCheck.verified}/${sourceCheck.total}` +
-    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synthesis.provider}:${synthesis.model} · ${elapsed}s · ${usageLine(usage)}_`;
+    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synthesis.provider}:${synthesis.model}` +
+    skippedNote +
+    ` · ${elapsed}s · ${usageLine(usage)}_`;
 
   const attemptsNote = mode === 'files' && failures.size
     ? '\n\nProvider attempts:\n' + attempts.map((a) =>
@@ -782,6 +812,7 @@ export async function swarmSearch(opts) {
       sourceCheck,
       synthesis: { provider: synthesis.provider, model: synthesis.model },
       ...(mode === 'files' ? { providerAttempts: attempts } : {}),
+      ...(skippedProviders.length ? { skippedProviders } : {}),
       elapsedSec: Number(elapsed),
       usage,
     },

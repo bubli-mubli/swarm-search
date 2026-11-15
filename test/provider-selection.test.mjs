@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { join } from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { byId, resolveProviders } from '../src/providers/index.mjs';
 import { swarmSearch } from '../src/swarm.mjs';
 import { ProviderError } from '../src/providers/base.mjs';
-import { mockAvailable } from './helpers.mjs';
+import { mockAvailable, tempDir, setEnv } from './helpers.mjs';
 
 const ids = (slots) => slots.map((s) => s.provider.id);
 
@@ -59,4 +61,56 @@ test('router failure never reaches paid API providers', async (t) => {
   assert.equal(report.workers[0].provider, 'claude-cli');
   assert.equal(report.synthesis.provider, 'claude-cli');
   assert.deepEqual(calls, ['claude-cli', 'claude-cli']);
+});
+
+test('FAILS_ON_OLD: files without --provider runs on arcodex-cli when available', async (t) => {
+  mockAvailable(t, ['arcodex-cli', 'agy-cli']);
+  setEnv(t, { SWARM_PROVIDER: 'agy-cli' });
+  const calls = [];
+  t.mock.method(byId['arcodex-cli'], 'complete', async () => {
+    calls.push('arcodex-cli');
+    return { text: 'Findings: test (server.mjs:1)' };
+  });
+  t.mock.method(byId['agy-cli'], 'complete', async () => {
+    calls.push('agy-cli');
+    throw new Error('agy must not be called in files mode');
+  });
+  const dir = await tempDir(t);
+  const file = join(dir, 'server.mjs');
+  await writeFile(file, 'const port = 8787;\n');
+  const progressMessages = [];
+  const { report, markdown } = await swarmSearch({
+    query: 'port?',
+    mode: 'files',
+    paths: [file],
+    workers: 1,
+    rank: 'off',
+    onProgress: (m) => progressMessages.push(m),
+  });
+  assert.equal(report.workers[0].provider, 'arcodex-cli');
+  assert.equal(report.synthesis.provider, 'arcodex-cli');
+  assert.ok(calls.includes('arcodex-cli'));
+  assert.ok(!calls.includes('agy-cli'));
+  assert.match(markdown, /arcodex-cli/);
+  assert.match(markdown, /skipped: agy-cli \(web access cannot be disabled\)/);
+  assert.ok(progressMessages.some((m) => m.includes('skipping agy-cli (web access cannot be disabled)')));
+  assert.ok(progressMessages.some((m) => m.includes('provider arcodex-cli chosen')));
+});
+
+test('explicit --provider agy-cli in files mode throws actionable error with reason', async (t) => {
+  mockAvailable(t, ['arcodex-cli', 'agy-cli']);
+  const dir = await tempDir(t);
+  const file = join(dir, 'server.mjs');
+  await writeFile(file, 'const port = 8787;\n');
+  await assert.rejects(
+    swarmSearch({
+      query: 'port?',
+      mode: 'files',
+      paths: [file],
+      provider: 'agy-cli',
+      workers: 1,
+      rank: 'off',
+    }),
+    /files mode: agy-cli cannot run without web access; choose --provider arcodex-cli, claude-cli, codex-cli or gemini-cli/
+  );
 });

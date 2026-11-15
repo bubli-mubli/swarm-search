@@ -44,7 +44,13 @@ export async function detectAvailable({ mode } = {}) {
 // "claude-cli,agy-cli" → массив {provider, model}. Пустая строка = авто.
 export async function resolveProviders(spec, { available, mode, remote = false, includeFallbacks = false } = {}) {
   const avail = available ?? (await detectAvailable({ mode }));
-  const raw = (spec || process.env.SWARM_PROVIDER || 'auto').trim();
+  const explicit = spec !== undefined && spec !== null && !['', 'auto'].includes(spec.trim());
+  let raw = (spec || process.env.SWARM_PROVIDER || 'auto').trim();
+  if (!explicit && mode === 'files') {
+    const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+    const offlineParts = parts.filter((p) => !byId[p.split(':')[0]]?.webAlwaysOn);
+    raw = offlineParts.length ? offlineParts.join(',') : 'auto';
+  }
   // Filter before auto selection and mixed family deduplication.
   const compatible = avail.filter((p) => (mode !== 'files' || !p.webAlwaysOn) && (!remote || !p.localFiles));
   const requireCompatible = () => {
