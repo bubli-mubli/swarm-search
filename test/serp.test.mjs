@@ -141,6 +141,19 @@ test('SERP incomplete ranks are partial and retain real positions; unknown regio
   assert.equal(report.serp.results[0].position, 2);
 });
 
+test('SERP markdown keeps gaps in native positions visible without ordered-list renumbering', async (t) => {
+  fake(t, { async searchSerp() { return { results: [
+    { position: 1, url: page, title: 'First', fetched_at },
+    { position: 3, url: 'https://example.org/third', title: 'Third', fetched_at },
+  ] }; } });
+  const { markdown, report } = await swarmSearch({ ...options, mode: 'serp', topN: 3 });
+  assert.equal(report.serp.status, 'partial');
+  assert.deepEqual(report.serp.results.map(r => r.position), [1, 3]);
+  assert.match(markdown, /^- position: 1 /m);
+  assert.match(markdown, /^- position: 3 /m);
+  assert.doesNotMatch(markdown, /^\d+\. /m);
+});
+
 test('SERP validates options before invoking a provider and propagates cancellation', async (t) => {
   fake(t, { async searchSerp() { assert.fail('invalid request'); } });
   for (const topN of [0, 101, 1.5, 'bad', true]) {

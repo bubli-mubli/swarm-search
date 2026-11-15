@@ -23,7 +23,7 @@ export async function serpSearch({ query, topN, region, slots, signal, timeoutMs
   const finish = (status, reason, results = [], actualRegion = region) => {
     const serp = { query, topN, region: actualRegion, provider: provider?.id ?? null, status, reason, results };
     const markdown = `SERP: ${status}${reason ? ` (${reason})` : ''}\nQuery: ${query}\nRegion: ${actualRegion ?? 'unknown'}\n` +
-      results.map(r => `${r.position}. ${r.title} — ${r.url} (fetched_at: ${r.fetched_at})`).join('\n');
+      results.map(r => `- position: ${r.position} · ${r.title} — ${r.url} (fetched_at: ${r.fetched_at})`).join('\n');
     return { markdown, report: {
       query, mode: 'serp', status, serp, workers: [], round2: [], rounds: 0,
       elapsedSec: (Date.now() - started) / 1000,
