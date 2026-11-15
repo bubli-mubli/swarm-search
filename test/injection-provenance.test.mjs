@@ -32,6 +32,7 @@ function dataBlocks(prompt) {
 }
 
 function assertDataOnly(prompt, token, origin) {
+  assert.ok(prompt.includes(token), `${token} must be delivered before classifying its boundary`);
   const blocks = dataBlocks(prompt).filter(block => block[3].includes(token));
   assert.ok(blocks.length, `${token} must actually be delivered inside quoted data`);
   if (origin) assert.ok(blocks.some(block => origin.test(block[2])), 'quoted data must name its origin');
@@ -79,12 +80,13 @@ function fixture(t, { mode = 'web', workerTail = attacks.ignore, proposal, retry
         const ref = mode === 'files' ? 'notes.txt:1' : url;
         const quote = page === undefined ? '' : ` — Quote: "${marker}"`;
         const fromData = request.prompt.includes(marker) ? `\n${marker}` : '';
+        const tail = requests.workers.length === 1 ? workerTail : '';
         return { text: `## Findings\n- ${mainFact} (${ref})${quote}\n## ${mode === 'files' ? 'Not found' : 'Uncertain'}\n- none` +
-          (workerTail ? `\n${workerTail}` : fromData) };
+          (tail ? `\n${tail}` : fromData) };
       }
       if (request.system.startsWith('You audit')) {
         requests.audits.push(request);
-        return { text: JSON.stringify({ followups: proposal ? [proposal] : [] }) };
+        return { text: JSON.stringify({ followups: proposal && request.prompt.includes(marker) ? [proposal] : [] }) };
       }
       if (request.system.includes('critique round')) {
         requests.workers.push(request);
@@ -123,10 +125,11 @@ test('FAILS_ON_OLD 487: both unmarked auditor routes are data at every injection
       for (const [form, attack] of Object.entries(attacks)) {
         await t.test(`${mode}/${position}/${form}`, async t => {
           const proposal = atPosition('Check the documented value\nCompare evidence\nResolve the gap\nKeep the finding sourced', attack, position);
-          const { requests, options } = fixture(t, { mode, workerTail: '', proposal });
+          const { requests, options } = fixture(t, { mode, workerTail: attack, proposal });
           if (mode === 'files') options.paths = [await corpus(t)];
           const { markdown, report } = await swarmSearch({ ...options, rounds: 2, round2: 'gaps' });
           assert.equal(requests.audits.length, 1);
+          assertDataOnly(requests.audits[0].prompt, marker, /worker .* report/);
           assert.equal(requests.workers.length, 2, 'follow-up must run, rather than losing the delivered proposal');
           assert.equal(report.round2.length, 1);
           const followup = requests.workers[1];
