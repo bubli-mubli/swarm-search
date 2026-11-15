@@ -78,6 +78,21 @@ The MCP tool output starts with a note that the content was compiled from untrus
 
 **Answer quality checks done in code, not only in prompts:**
 
+- *Fact provenance and data gaps.* Each worker in `report.workers` / `report.round2` adds
+  `facts: [{text, line, source_url, fetched_at, status, reason?}]`. Web fact status is `ok` only
+  after HTTP 200 and a matching quote, `unavailable` after a failed fetch or an explicit worker
+  admission, and `partial` when evidence is incomplete (including no quote). `fetched_at` is a
+  code-produced ISO UTC time for the completed fetch/check attempt, or `null` when none was made;
+  it is not the publication date. Worker-level `fetched_at` records report collection, and
+  `source_url` is the single cited source or `null` for multiple/unknown sources. Local findings
+  use `path:line` as their source reference and the time the report was processed; external URLs
+  in files mode remain `partial` without network access. The existing `text`, `sources: [{url, title}]`
+  and numeric HTTP `sourceVerification[].status` are retained. Unavailable findings are withheld
+  from audit, critique and synthesis; unattributed claims in a report with unavailable sources
+  are also withheld. `report.unavailableSources` lists the missing sources with worker ids,
+  timestamps and reasons. Synthesis receives that list and is told not to guess; a code-generated
+  “Data gaps” notice keeps incomplete coverage visible even if the model omits it. Raw diagnostic
+  worker text remains available and must be interpreted together with its fact statuses.
 - *Source check.* After synthesis every URL and `path:line` in the Sources list and in the answer
   text must appear in a round-1 or round-2 worker report as a whole token: URLs match exactly (only a
   trailing `/` is ignored), `path:line` matches the same path with the line inside a line or range

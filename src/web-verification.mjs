@@ -2,6 +2,7 @@
 import { fetchSource } from './source-fetch.mjs';
 
 export const URL_RE = /https?:\/\/(?:\[[\da-f:.]+\]|[^\s)\]>"'`<\[])+/gi;
+export const PATH_LINE_RE = /(?:[\w.@~-]+\/)+[\w.@-]+:\d+(?:[-–]\d+)?|[\w@-][\w.@-]*\.[A-Za-z]\w*:\d+(?:[-–]\d+)?/g;
 const receipts = new WeakSet();
 const key = (url) => url.replace(/\/+$/, '');
 const urlsIn = (text) => [...new Set((String(text).match(URL_RE) || []).map((u) => u.replace(/[.,;:!?]+$/, '')))];
@@ -47,10 +48,14 @@ async function readBody(response) {
   }
 }
 
-export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal, mode = 'web' } = {}) {
+export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal, mode = 'web', sources = [], status } = {}) {
   const clean = stripVerification(text);
   const lines = clean.split('\n');
   const sourceVerification = [];
+  const facts = [];
+  // A provider may admit missing evidence, but cannot grant successful verification.
+  const declaredUnavailable = new Set((Array.isArray(sources) ? sources : [])
+    .filter(s => s?.status === 'unavailable').map(s => s.source_url ?? s.url));
   const pages = new Map();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.min(timeoutMs, 10_000));
@@ -65,33 +70,54 @@ export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal, mo
       const quote = urls.length === 1 && quoted ? (quoted[1] || quoted[2] || quoted[3]).trim() : '';
       const marks = [];
       for (const url of urls) {
-        const evidence = { url, quote, verified: 'unverified', reason: mode === 'files' ? 'no_fetch_files_mode' : 'no_fetch' };
-        if (mode !== 'files' && quote && (pages.has(url) || pages.size < 12) && !controller.signal.aborted) {
+        const evidence = { url, quote, verified: 'unverified', reason: mode === 'files' ? 'no_fetch_files_mode' : 'no_fetch',
+          source_url: url, fetched_at: null, source_status: 'partial' };
+        const unavailableMarker = /^\s*(?:[-*+]|\d+[.)])?\s*status\s*=\s*unavailable\b/i.test(lines[i]);
+        if (mode !== 'files' && (status === 'unavailable' || declaredUnavailable.has(url) || unavailableMarker)) {
+          evidence.source_status = 'unavailable';
+          evidence.reason = 'provider_unavailable';
+        } else if (mode !== 'files' && quote && (pages.has(url) || pages.size < 12) && !controller.signal.aborted) {
           if (!pages.has(url)) {
             try {
               const response = await fetchSource(url, { signal: controller.signal });
               const body = response.status === 200 ? pageText(await readBody(response)) : '';
               if (response.status !== 200) await response.body?.cancel();
-              pages.set(url, { status: response.status, body });
+              pages.set(url, { status: response.status, body, fetched_at: new Date().toISOString() });
             } catch (error) {
-              pages.set(url, error?.code === 'blocked_address' ? { reason: 'blocked_address' } : null);
+              pages.set(url, { reason: error?.code === 'blocked_address' ? 'blocked_address' : 'no_fetch',
+                fetched_at: new Date().toISOString() });
             }
           }
           const page = pages.get(url);
           if (page) {
+            evidence.fetched_at = page.fetched_at;
             if (page.status !== undefined) evidence.status = page.status;
-            if (page.reason) evidence.reason = page.reason;
-            else if (page.status !== 200) evidence.reason = `http_${page.status}`;
+            if (page.reason || page.status !== 200) {
+              evidence.reason = page.reason || `http_${page.status}`;
+              evidence.source_status = 'unavailable';
+            }
             else if (!page.body.includes(normalize(quote))) evidence.reason = 'quote_not_found';
             else {
               evidence.verified = 'yes';
+              evidence.source_status = 'ok';
               delete evidence.reason;
             }
           }
         }
         receipts.add(evidence);
         sourceVerification.push(evidence);
+        facts.push({ text: lines[i], line: i + 1, source_url: url, fetched_at: evidence.fetched_at,
+          status: evidence.source_status, ...(evidence.reason ? { reason: evidence.reason } : {}) });
         marks.push(verificationMark(evidence));
+      }
+      if (!urls.length && lines[i].trim() && !/^\s*#|^Provider sources:|^NOTHING RELEVANT\.?$/i.test(lines[i]) &&
+          !/^\s*(?:[-*+]|\d+[.)])?\s*(?:none|nothing|нет|ничего|n\/a)[.!]?\s*$/i.test(lines[i])) {
+        const refs = mode === 'files' ? [...new Set(lines[i].match(PATH_LINE_RE) || [])] : [];
+        for (const ref of refs.length ? refs : [null]) {
+          facts.push({ text: lines[i], line: i + 1, source_url: ref,
+            fetched_at: ref ? new Date().toISOString() : null, status: ref ? 'ok' : status === 'unavailable' ? 'unavailable' : 'partial',
+            ...(ref ? {} : { reason: status === 'unavailable' ? 'provider_unavailable' : 'missing_source_url' }) });
+        }
       }
       if (marks.length) {
         lines[i] = lines[i].replace(/\bVERIFIED=unverified \(no_fetch\)/g, '').trimEnd() +
@@ -99,7 +125,7 @@ export async function verifyWorkerSources(text, { timeoutMs = 10_000, signal, mo
       }
     }
     if (signal?.aborted) throw new Error('cancelled');
-    return { text: lines.join('\n'), sourceVerification };
+    return { text: lines.join('\n'), sourceVerification, facts };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
