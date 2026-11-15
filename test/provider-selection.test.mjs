@@ -53,7 +53,10 @@ test('router failure never reaches paid API providers', async (t) => {
   const calls = [];
   t.mock.method(byId['arcodex-cli'], 'complete', async () => { throw new ProviderError('AgentRouter: down', { status: 503 }); });
   t.mock.method(byId['agy-cli'], 'complete', async () => { throw new ProviderError('agy: down', { status: 503 }); });
-  t.mock.method(byId['claude-cli'], 'complete', async () => { calls.push('claude-cli'); return { text: 'Answer' }; });
+  t.mock.method(byId['claude-cli'], 'complete', async ({ system }) => {
+    calls.push('claude-cli');
+    return { text: system.startsWith('You are the synthesizer') ? 'Answer [1].\n## Sources\n1. https://example.org/page' : 'Answer' };
+  });
   for (const id of ['anthropic', 'openai', 'google', 'openrouter']) {
     t.mock.method(byId[id], 'complete', async () => assert.fail(`${id} must not be called`));
   }
