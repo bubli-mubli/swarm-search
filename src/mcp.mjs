@@ -29,7 +29,9 @@ export const TOOLS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'The research question or what to find.' },
-        mode: { type: 'string', enum: ['auto', 'web', 'files'], description: 'auto = files if paths given, else web.' },
+        mode: { type: 'string', enum: ['auto', 'web', 'files', 'serp'], description: 'auto = files if paths given, else web. serp = native organic positions, or unavailable with a reason.' },
+        top_n: { type: 'integer', minimum: 1, maximum: 100, description: 'SERP: first N positions (default 10).' },
+        region: { type: 'string', description: 'SERP search region passed to the provider, e.g. RU. Omit for provider default/unknown.' },
         paths: { type: 'array', items: { type: 'string' }, description: 'Local files/directories to scan (files mode).' },
         workers: {
           type: 'integer',
@@ -88,9 +90,11 @@ export async function callTool(name, args = {}, { onProgress, signal, remote = f
     if (remote && files && !filesRoots.length) {
       throw new Error('files mode is disabled for remote (HTTP) clients; the server owner can allow it with SWARM_FILES_ROOTS');
     }
-    const { markdown } = await swarmSearch({
+    const { markdown, report } = await swarmSearch({
       query: args.query,
       mode: args.mode,
+      topN: args.top_n,
+      region: args.region,
       paths: args.paths,
       workers: args.workers,
       provider: args.provider,
@@ -107,7 +111,7 @@ export async function callTool(name, args = {}, { onProgress, signal, remote = f
       filesRoots: remote ? filesRoots : undefined,
       remote,
     });
-    return { content: [{ type: 'text', text: UNTRUSTED_NOTE + markdown }] };
+    return { content: [{ type: 'text', text: UNTRUSTED_NOTE + markdown }], structuredContent: report };
   }
   throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32602 });
 }

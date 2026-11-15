@@ -112,6 +112,34 @@ The MCP tool output starts with a note that the content was compiled from untrus
   `ranked files: kept/total kept, N dropped`, and the synthesizer is told coverage is partial.
   `rank: "on"` always orders files by relevance, `"off"` disables ranking.
 
+## Page URLs and SERP
+
+Web workers preserve page URLs (paths, query strings and fragments) in their text and
+`report.workers[].sources: [{url, title}]`. The worker and web report have `status: "partial"`
+when page sources are missing or only a bare domain is available; `sourceIssues` explains why.
+Web research conservatively requires page URLs, so a homepage alone also receives this status.
+This status describes source completeness; quote verification remains a separate check.
+
+```bash
+swarm-search run "как начать вайбкодинг с нуля" --serp --top-n 3 --region RU --json
+# --mode serp is equivalent to --serp
+```
+
+MCP: `swarm_search({query: "как начать вайбкодинг с нуля", mode: "serp", top_n: 3, region: "RU"})`.
+The CLI keeps `{markdown, report}`; MCP keeps text content and adds `structuredContent` with
+the report. SERP data is in `report.serp`: `{query, topN, region, provider, status, reason, results}`,
+where each result is `{position, url, title, fetched_at}`. `fetched_at` is the adapter's retrieval
+timestamp, not a publication date. `top_n` / `--top-n` defaults to 10 (1–100); omitted region
+means provider default, reported as `null` if unknown. A requested region must be confirmed
+by the provider. Incomplete native positions are `partial` and keep their actual numbers.
+
+**Current LLM adapters do not expose native organic SERP positions.** They return
+`status: "unavailable"`, an explanatory `reason` and `results: []`, without an LLM call.
+Citation numbering and model-written rankings never become search positions. A future native
+adapter must implement `searchSerp({query, topN, region, signal, timeoutMs})` and return
+`{region, results}` with explicit positions, full page URLs, titles and retrieval timestamps.
+SERP skips planning/synthesis and cannot be combined with file paths.
+
 ## Requirements
 
 - Node.js `^22.23.4 || ^24.22.1 || >=26.12.1` (releases with the Brotli security patch; any

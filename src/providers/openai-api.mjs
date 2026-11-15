@@ -35,6 +35,10 @@ export const openaiApi = {
         .join('\n');
     return {
       text,
+      sources: (data.output || []).filter(item => item.type === 'message')
+        .flatMap(item => item.content || []).flatMap(content => content.annotations || [])
+        .filter(annotation => annotation.type === 'url_citation' && annotation.url)
+        .map(annotation => ({ url: annotation.url, title: annotation.title || '' })),
       usage: { inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens },
     };
   },

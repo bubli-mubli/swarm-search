@@ -9,13 +9,16 @@ const USAGE = `swarm-search — parallel LLM workers + one synthesizer
 
 Usage:
   swarm-search run "<question>" [--workers N|auto] [--rounds 1|2] [--round2 gaps|critique]
-                                [--provider P] [--model M] [--paths a,b] [--mode web|files]
+                                [--provider P] [--model M] [--paths a,b] [--mode web|files|serp]
+                                [--serp] [--top-n N] [--region RU]
                                 [--synth-provider P] [--synth-model M] [--language ru] [--rank auto|on|off] [--json]
     workers: omit (auto) and the planner decides how many angles the question has (1-8);
     rounds 2: a second round after workers see round-1 results — "gaps" fills contradictions and
     unanswered parts with targeted follow-ups, "critique" makes every worker review the others.
     rank (files mode): order files by relevance to the question before sharding; "auto" only when the
     corpus exceeds SWARM_RANK_CHARS, then the least relevant files over that budget are dropped (counted in the footer).
+    serp: native organic search positions only; top-n defaults to 10, region omitted = unknown/provider default.
+    Providers without native positions return unavailable with a reason, without calling a model.
   swarm-search mcp                      MCP server over stdio (Claude Code/Desktop, Codex, Antigravity, Gemini CLI)
   swarm-search mcp --http [--port 8787] [--host 0.0.0.0] [--token SECRET] [--files-roots dir1,dir2]
                                         MCP over Streamable HTTP (ChatGPT connectors, remote clients);
@@ -39,6 +42,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a.startsWith('--')) {
       const key = a.slice(2);
+      if (key === 'serp') { flags[key] = true; continue; }
       const next = argv[i + 1];
       if (next !== undefined && !next.startsWith('--')) {
         flags[key] = next;
@@ -106,6 +110,9 @@ async function main() {
         model: flags.model,
         paths: flags.paths ? String(flags.paths).split(',') : [],
         mode: flags.mode,
+        serp: flags.serp,
+        topN: flags['top-n'],
+        region: flags.region,
         synthProvider: flags['synth-provider'],
         synthModel: flags['synth-model'],
         language: flags.language,

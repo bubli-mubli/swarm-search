@@ -36,15 +36,17 @@ export const anthropicApi = {
       .join('\n');
     // URL живут не в тексте, а в citations текстовых блоков и в результатах web_search — собираем их отдельно.
     const urls = new Set();
+    const titles = new Map();
     for (const b of blocks) {
-      for (const c of b.citations || []) if (c.url) urls.add(c.url);
+      for (const c of b.citations || []) if (c.url) { urls.add(c.url); if (c.title) titles.set(c.url, c.title); }
       if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
-        for (const r of b.content) if (r.url) urls.add(r.url);
+        for (const r of b.content) if (r.url) { urls.add(r.url); if (r.title) titles.set(r.url, r.title); }
       }
     }
     const sources = [...urls].map((u, i) => `[${i + 1}] ${u}`);
     return {
       text: sources.length ? `${text}\n\nSources:\n${sources.join('\n')}` : text,
+      sources: [...urls].map(url => ({ url, title: titles.get(url) || '' })),
       usage: { inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens },
     };
   },

@@ -10,7 +10,10 @@ Steps:
 1. Parse `$ARGUMENTS`. Everything before the first `--flag` is the `query`. Recognize optional flags:
    `--files a,b` → `paths` (files mode), `--workers N` → `workers` (omit otherwise: auto sizing),
    `--rounds 2` → `rounds`, `--round2 gaps|critique` → `round2`, `--provider X` → `provider`,
-   `--model M` → `model`, `--lang L` → `language`.
+   `--model M` → `model`, `--lang L` → `language`,
+   `--serp` → `mode: "serp"`, `--top-n N` → `top_n`, `--region R` → `region`.
+   For requests for the first N organic search results, use `mode: "serp"` and preserve
+   `unavailable`/`partial` with its reason. Never replace unavailable positions with numbered domains.
 2. Call the MCP tool `swarm_search` with those arguments. Do not run the research yourself
    and do not spawn subagents — the tool already fans out to parallel workers. It may take 1–5 minutes.
 3. Present the returned markdown to the user as-is (it already contains the answer, findings with
