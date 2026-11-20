@@ -24,7 +24,9 @@ export const TOOLS = [
     description:
       'Parallel swarm research. Splits the question into sub-questions, runs N cheap LLM workers in parallel ' +
       '(web search, or a scan of local files when `paths` is given), then one synthesizer returns a sourced summary. ' +
-      'Use for broad research questions, multi-source comparisons, "what is the current state of X", or scanning a large codebase/doc set for something.',
+      'Use for broad research questions, multi-source comparisons, "what is the current state of X", or scanning a large codebase/doc set for something. ' +
+      'Returns content with one text item (untrusted-data warning + Markdown) and structuredContent with a JSON report object; fields vary by mode (web/files/serp). ' +
+      'Tool error results contain text content and isError: true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -71,7 +73,9 @@ export const TOOLS = [
   },
   {
     name: 'swarm_providers',
-    description: 'List LLM providers this machine can use for swarm workers (installed CLIs and API keys present).',
+    description:
+      'List LLM providers this machine can use for swarm workers (installed CLIs and API keys present). ' +
+      'Returns content with one text item: one line per provider with ✓/✗ availability, id, label, and optional default model; no structuredContent.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];
