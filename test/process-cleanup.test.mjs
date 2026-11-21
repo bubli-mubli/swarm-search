@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { spawn } from 'node:child_process';
+import childProcess, { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -120,6 +121,34 @@ try {
     t.diagnostic(`error-to-exit=${exit.at - error.errorAt}ms`);
   });
 }
+
+test('FAILS_ON_OLD 0405db7: nonzero exit preserves unread stderr', async () => {
+  const realSpawn = childProcess.spawn;
+  childProcess.spawn = (...args) => {
+    const child = realSpawn(...args);
+    // Keep real pipe data unread until exit; resume must drain it before close.
+    child.stderr.pause();
+    child.once('exit', () => child.stderr.resume());
+    return child;
+  };
+  syncBuiltinESMExports();
+  let result;
+  try {
+    result = runProcess(process.execPath, ['-e', String.raw`
+      process.stderr.write('ordinary failure tail 979\n');
+      process.exit(3);
+    `], { timeoutMs: 3000 });
+  } finally {
+    childProcess.spawn = realSpawn;
+    syncBuiltinESMExports();
+  }
+  await assert.rejects(result, error => {
+    assert.ok(error instanceof ProviderError);
+    assert.match(error.message, /exited with code 3/);
+    assert.equal(error.stderr, 'ordinary failure tail 979\n');
+    return true;
+  });
+});
 
 test('runProcess: success and startup errors', async () => {
   const result = await runProcess(process.execPath, ['-e', `

@@ -43,6 +43,7 @@ export function runProcess(cmd, args, { input, timeoutMs = 180_000, env, signal 
     });
     let stdout = '';
     let stderr = '';
+    let inputError;
     let settled = false;
 
     const finish = (fn, value) => {
@@ -53,8 +54,7 @@ export function runProcess(cmd, args, { input, timeoutMs = 180_000, env, signal 
       fn(value);
     };
 
-    const stop = (error) => {
-      if (settled) return;
+    const terminateOwnedProcesses = () => {
       if (child.pid) {
         if (process.platform === 'win32') {
           const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
@@ -81,6 +81,11 @@ export function runProcess(cmd, args, { input, timeoutMs = 180_000, env, signal 
           } while (killed); // Повторяем для новых детей.
         } catch { /* no procfs: group only */ }
       }
+    };
+
+    const stop = (error) => {
+      if (settled) return;
+      terminateOwnedProcesses();
       // Освобождаем каналы.
       child.stdin.destroy();
       child.stdout.destroy();
@@ -98,14 +103,18 @@ export function runProcess(cmd, args, { input, timeoutMs = 180_000, env, signal 
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
     child.stdin.on('error', (err) => {
-      if (err.code !== 'EPIPE') stop(new ProviderError(`${cmd} stdin: ${err.message}`, { cause: err, stderr }));
+      if (err.code !== 'EPIPE') inputError = err;
     });
-    child.on('error', (err) => stop(new ProviderError(`failed to start ${cmd}: ${err.message}`, { cause: err })));
-    child.on('exit', (code) => {
-      if (code !== 0) stop(new ProviderError(`${cmd} exited with code ${code}`, { stderr: stderr || stdout }));
+    child.on('error', (err) => finish(reject, new ProviderError(`failed to start ${cmd}: ${err.message}`, { cause: err })));
+    child.on('exit', () => {
+      if (settled) return;
+      clearTimeout(timer);
+      // Основной процесс завершён: убираем потомков, но дочитываем каналы до close.
+      terminateOwnedProcesses();
     });
     child.on('close', (code) => {
-      if (code === 0) finish(resolve, { stdout, stderr });
+      if (inputError) finish(reject, new ProviderError(`${cmd} stdin: ${inputError.message}`, { cause: inputError, stderr }));
+      else if (code === 0) finish(resolve, { stdout, stderr });
       else finish(reject, new ProviderError(`${cmd} exited with code ${code}`, { stderr: stderr || stdout }));
     });
 
