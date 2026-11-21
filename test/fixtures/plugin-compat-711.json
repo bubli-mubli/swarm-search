@@ -1,0 +1,72 @@
+{
+  "note": "Frozen connection contract from main 613937e for task 711. Do not regenerate from the current server. Versions and new optional tool arguments may change.",
+  "cli": { "name": "swarm-search", "path": "bin/swarm-search.mjs" },
+  "plugin": { "name": "swarm-search", "skillPath": "skills/swarm-search/SKILL.md" },
+  "connection": {
+    "swarm-search": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/swarm-search.mjs", "mcp"]
+    }
+  },
+  "initialize": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {},
+    "clientInfo": { "name": "plugin-compat-711", "version": "1" }
+  },
+  "tools": {
+    "swarm_search": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "mode": { "type": "string", "enum": ["auto", "web", "files", "serp"] },
+        "top_n": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "region": { "type": "string" },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "workers": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "rounds": { "type": "integer", "enum": [1, 2] },
+        "round2": { "type": "string", "enum": ["gaps", "critique"] },
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "synth_provider": { "type": "string" },
+        "synth_model": { "type": "string" },
+        "angles": { "type": "array", "items": { "type": "string" } },
+        "language": { "type": "string" },
+        "rank": { "type": "string", "enum": ["auto", "on", "off"] }
+      },
+      "required": ["query"]
+    },
+    "swarm_providers": { "type": "object", "properties": {} }
+  },
+  "providersCall": { "name": "swarm_providers", "arguments": {} },
+  "searchCall": {
+    "name": "swarm_search",
+    "arguments": {
+      "query": "Find PLUGIN_COMPAT_711 in the saved client fixture",
+      "mode": "files",
+      "top_n": 3,
+      "region": "RU",
+      "paths": ["test/fixtures/plugin-compat-711.json"],
+      "workers": 1,
+      "rounds": 2,
+      "round2": "critique",
+      "provider": "claude-cli",
+      "model": "compat-worker-711",
+      "synth_provider": "openai",
+      "synth_model": "compat-synthesis-711",
+      "angles": ["Find the compatibility marker"],
+      "language": "en",
+      "rank": "off"
+    }
+  },
+  "serpCall": {
+    "name": "swarm_search",
+    "arguments": {
+      "query": "PLUGIN_COMPAT_711 organic positions",
+      "mode": "serp",
+      "top_n": 3,
+      "region": "RU",
+      "provider": "claude-cli"
+    }
+  },
+  "marker": "PLUGIN_COMPAT_711"
+}
