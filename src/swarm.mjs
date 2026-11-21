@@ -68,10 +68,11 @@ function rawTextBlock(text) {
 }
 
 function rawWorkerReports(reports, mode, russian) {
+  // Markdown retains the usual source filtering; full texts stay in the structured report.
   return (russian ? '## Исходные отчёты воркеров' : '## Raw worker reports') + '\n\n' + reports.map(r =>
     `### Worker ${r.id} (${r.provider}${r.model ? `:${r.model}` : ''})\n` +
     `_[untrusted source: ${mode === 'files' ? 'files' : 'web pages'} via worker reports]_\n\n` +
-    rawTextBlock(`${russian ? 'Задание' : 'Task'}: ${r.label}\n\n${r.ok ? r.text : r.error || 'Worker failed'}`),
+    rawTextBlock(`${russian ? 'Задание' : 'Task'}: ${r.label}\n\n${r.ok ? synthesisReportText(r) : r.error || 'Worker failed'}`),
   ).join('\n\n');
 }
 

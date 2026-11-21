@@ -238,3 +238,53 @@ test('CLI --json exits with worker reports after a mocked synthesis timeout', as
   assert.match(stderr, /returning raw worker reports/);
   assert.equal(result.report.workers[0].text, workerText('files'));
 });
+
+for (const { round2, entirelyUnavailable, correctionTimeout } of [
+  { round2: 'gaps', entirelyUnavailable: false, correctionTimeout: false },
+  { round2: 'critique', entirelyUnavailable: false, correctionTimeout: true },
+  { round2: 'gaps', entirelyUnavailable: true, correctionTimeout: false },
+]) {
+  test(`FAILS_ON_OLD 986: ${round2} fallback filters ${entirelyUnavailable ? 'entirely unavailable' : 'mixed'} sources while retaining full structured reports`, async t => {
+    const f = fixture(t, { mode: 'web', available: ['arcodex-cli'] });
+    const available = 'https://example.com/public-986';
+    const unavailable = 'https://example.com/missing-986';
+    t.mock.method(byId['arcodex-cli'], 'complete', async request => {
+      if (request.system.startsWith('You audit')) return { text: '{"followups":["Check another finding"]}' };
+      if (request.system.startsWith('You are the synthesizer')) {
+        if (!correctionTimeout) throw new Error('fixture synthesis failure');
+        return request.prompt.includes('Violated format rule') ? new Promise(() => {}) : { text: malformed };
+      }
+      const followup = request.system.includes('critique round') || request.prompt.includes('Your sub-question (follow-up)');
+      const suffix = followup ? '_FOLLOWUP' : '';
+      return {
+        text: `## ${request.system.includes('critique round') ? 'Confirmed' : 'Findings'}\n` +
+          (entirelyUnavailable ? '' : `- PUBLIC_986${suffix} (${available})\n`) +
+          `- CONTROL_FACT_986${suffix} (${unavailable})\n\n  CONTROL_CONTINUATION_986${suffix}\n` +
+          (entirelyUnavailable ? '' : `- UNATTRIBUTED_986${suffix}\n`) +
+          '## Uncertain\n- none',
+        sources: [{ url: unavailable, status: 'unavailable' }],
+        ...(entirelyUnavailable ? { status: 'unavailable' } : {}),
+      };
+    });
+    const result = await within(t, swarmSearch({ ...f.options, rounds: 2, round2 }));
+    assert.equal(result.report.synthesisFailure.stage, correctionTimeout ? 'synthesis format correction' : 'synthesis');
+    assert.equal(result.report.status, 'partial');
+    assert.match(result.markdown, /Synthesis failed/);
+    assert.match(result.markdown, /incomplete/i);
+    assert.doesNotMatch(result.markdown, /CONTROL_FACT_986|CONTROL_CONTINUATION_986|UNATTRIBUTED_986/);
+    assert.ok(result.markdown.includes(unavailable), 'the unavailable URL must remain visible as a data gap');
+    assert.equal(result.report.workers.length, 1);
+    assert.equal(result.report.round2.length, 1);
+    for (const [index, report] of [...result.report.workers, ...result.report.round2].entries()) {
+      const suffix = index ? '_FOLLOWUP' : '';
+      assert.ok(report.text.includes(`CONTROL_FACT_986${suffix} (${unavailable})`));
+      assert.ok(report.text.includes(`\n\n  CONTROL_CONTINUATION_986${suffix}\n`));
+      assert.ok(report.facts.some(fact => fact.source_url === unavailable && fact.status === 'unavailable'));
+      assert.equal(report.status, entirelyUnavailable ? 'unavailable' : 'partial');
+      if (!entirelyUnavailable) {
+        assert.ok(report.text.includes(`UNATTRIBUTED_986${suffix}`));
+        assert.ok(result.markdown.includes(`PUBLIC_986${suffix} (${available})`));
+      }
+    }
+  });
+}
