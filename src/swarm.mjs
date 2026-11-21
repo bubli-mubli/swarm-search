@@ -2,6 +2,7 @@
 import { resolveProviders, detectAvailable, byId } from './providers/index.mjs';
 import { collectFiles, assertPathsAllowed, buildShards, rankFiles } from './corpus.mjs';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { verifyWorkerSources, sourceEvidence, stripVerification, verificationMark } from './web-verification.mjs';
 import { responseFormat, extractRefs } from './response-format.mjs';
 export { extractRefs } from './response-format.mjs';
@@ -17,6 +18,10 @@ export const DEFAULTS = {
   maxWorkers: 12,
   maxAutoWorkers: Number(process.env.SWARM_MAX_AUTO_WORKERS) || 8,
   timeoutMs: Number(process.env.SWARM_TIMEOUT_MS) || 180_000,
+  // Пределы оркестратора: попытка провайдера, вся цепочка синтеза и вся цепочка коррекции.
+  synthesisAttemptTimeoutMs: 30_000,
+  synthesisTimeoutMs: 60_000,
+  synthesisCorrectionTimeoutMs: 30_000,
   shardChars: Number(process.env.SWARM_SHARD_CHARS) || 60_000,
   rounds: Number(process.env.SWARM_ROUNDS) || 1,
   round2: process.env.SWARM_ROUND2 || 'gaps',
@@ -26,6 +31,49 @@ export const DEFAULTS = {
   // Пауза перед повтором после 429.
   retryBackoffMs: Number(process.env.SWARM_RETRY_BACKOFF_MS) || 1500,
 };
+
+// Таймер адаптера недостаточен: complete() может не завершиться даже после abort.
+// Отдельно прекращаем ожидание и отменяем работу; поздний reject остаётся обработанным.
+async function withDeadline(run, timeoutMs, signal, label) {
+  if (signal?.aborted) throw signal.reason || new Error('cancelled');
+  const controller = new AbortController();
+  let rejectDeadline;
+  const deadline = new Promise((_, reject) => { rejectDeadline = reject; });
+  const stop = error => {
+    rejectDeadline(error);
+    controller.abort(error);
+  };
+  const onAbort = () => stop(signal.reason || new Error('cancelled'));
+  signal?.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => stop(Object.assign(new Error(`${label} timed out after ${timeoutMs}ms`),
+    { code: 'ETIMEDOUT', timeoutMs })), timeoutMs);
+  try {
+    const work = Promise.resolve().then(() => {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      return run(controller.signal);
+    });
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+// Сохраняем исходный текст внутри ограждения, которое сам отчёт не сможет закрыть.
+function rawTextBlock(text) {
+  const body = String(text || '');
+  const length = (body.match(/`+/g) || []).reduce((n, run) => Math.max(n, run.length + 1), 3);
+  const fence = '`'.repeat(length);
+  return `${fence}\n${body}\n${fence}`;
+}
+
+function rawWorkerReports(reports, mode, russian) {
+  return (russian ? '## Исходные отчёты воркеров' : '## Raw worker reports') + '\n\n' + reports.map(r =>
+    `### Worker ${r.id} (${r.provider}${r.model ? `:${r.model}` : ''})\n` +
+    `_[untrusted source: ${mode === 'files' ? 'files' : 'web pages'} via worker reports]_\n\n` +
+    rawTextBlock(`${russian ? 'Задание' : 'Task'}: ${r.label}\n\n${r.ok ? r.text : r.error || 'Worker failed'}`),
+  ).join('\n\n');
+}
 
 // Граница данных: текст страниц, файлов и чужих отчётов — данные, а не команды (защита от prompt injection).
 const DATA_BOUNDARY =
@@ -477,13 +525,17 @@ export async function swarmSearch(opts) {
     .map((provider) => ({ provider, model: provider.defaultModel })) : [];
 
   // Skip known failures for the rest of this run.
-  const call = async (slot, job, stage) => {
+  const call = async (slot, job, stage, limits = {}) => {
+    const callSignal = limits.signal ?? signal;
+    const callTimeoutMs = Math.min(timeoutMs, limits.timeoutMs ?? timeoutMs);
     let emptyResponse;
     for (const { provider, model } of mode === 'files' ? [slot, ...slots, ...fallbacks] : [slot]) {
       if (failures.has(provider.id)) continue;
       throwIfCancelled();
+      if (callSignal?.aborted) throw callSignal.reason || new Error('cancelled');
       try {
-        const res = await provider.complete({ ...job, model, timeoutMs, signal });
+        const res = await withDeadline(boundedSignal => provider.complete({ ...job, model,
+          timeoutMs: callTimeoutMs, signal: boundedSignal }), callTimeoutMs, callSignal, `${stage}: ${provider.id}`);
         throwIfCancelled();
         if (!res || typeof res.text !== 'string') throw new SyntaxError('provider response text must be a string');
         const sourceResult = workerSourceResult(res);
@@ -504,6 +556,7 @@ export async function swarmSearch(opts) {
           sourceResult: err.sourceResult ?? sourceFailure(err) };
         attempts.push(attempt);
         failures.set(provider.id, attempt);
+        if (callSignal?.aborted) throw Object.assign(err, { sourceAttempts: attempts.filter(a => a.stage === stage) });
         progress(`${stage}: ${provider.id} failed, trying next offline provider`);
       }
     }
@@ -519,8 +572,9 @@ export async function swarmSearch(opts) {
 
   const webDown = new Set();
   const isUnavailable = (err) => err?.status === 429 || /quota|resource_exhausted|failed to start|exited with code 127|\b429\b/i.test(`${err?.message || ''} ${err?.stderr || ''}`);
-  const complete = async (candidates, request, label, worker = false) => {
-    if (mode === 'files') return call(candidates[0], request, label);
+  const complete = async (candidates, request, label, worker = false, limits = {}) => {
+    const callSignal = limits.signal ?? signal;
+    if (mode === 'files') return call(candidates[0], request, label, limits);
     // Провайдер, отказавший по квоте или не запустившийся, пропускаем до конца прогона (последний кандидат остаётся).
     const live = candidates.filter((c, k) => !webDown.has(c.provider.id) || k === candidates.length - 1);
     if (live.length) candidates = live;
@@ -530,7 +584,7 @@ export async function swarmSearch(opts) {
       const slot = candidates[i];
       let res, error;
       try {
-        res = await call(slot, request, label);
+        res = await call(slot, request, label, limits);
         res = { ...res, provider: slot.provider.id, model: slot.model, ...(i ? { retriedFrom: candidates[0].provider.id } : {}) };
         sourceAttempts.push({ provider: slot.provider.id, model: slot.model, sourceResult: res.sourceResult });
         res.sourceAttempts = sourceAttempts;
@@ -538,7 +592,7 @@ export async function swarmSearch(opts) {
         error = new Error('empty response');
       } catch (err) {
         sourceAttempts.push({ provider: slot.provider.id, model: slot.model, sourceResult: sourceFailure(err) });
-        if (signal?.aborted || !isRetryable(err)) throw Object.assign(err, { sourceAttempts });
+        if (callSignal?.aborted || !isRetryable(err)) throw Object.assign(err, { sourceAttempts });
         error = err;
       }
       if (i + 1 === candidates.length) {
@@ -548,7 +602,7 @@ export async function swarmSearch(opts) {
       serviceCalls.push(res || { error });
       if (isUnavailable(error)) webDown.add(slot.provider.id);
       if (error.status === 429 || /rate.?limit|too many requests|\b429\b/i.test(error.message)) {
-        await new Promise(r => setTimeout(r, DEFAULTS.retryBackoffMs));
+        await delay(DEFAULTS.retryBackoffMs, undefined, { signal: callSignal });
       }
       throwIfCancelled();
       if (worker && i === 0) retried += 1;
@@ -558,6 +612,11 @@ export async function swarmSearch(opts) {
   const synthCandidates = [synth, ...synthPool.filter(s => s.provider.id !== synth.provider.id &&
     (mode !== 'files' || !s.provider.webAlwaysOn) && (!opts.remote || !s.provider.localFiles))
     .slice(0, synthAutomatic ? undefined : 1).map(s => ({ provider: s.provider, model: s.model ?? s.provider.defaultModel }))];
+  // Потолок цепочки включает запасных провайдеров и паузы; каждая попытка получает свой таймер.
+  const synthesize = (request, stage, stepTimeoutMs) => withDeadline(stepSignal =>
+    complete(synthCandidates, request, stage, false, {
+      signal: stepSignal, timeoutMs: Math.min(timeoutMs, DEFAULTS.synthesisAttemptTimeoutMs),
+    }), Math.min(timeoutMs, stepTimeoutMs), signal, stage);
 
   // Запускает список заданий на воркерах и превращает результаты в отчёты.
   const runJobs = async (jobs, concurrency, stage) => {
@@ -809,7 +868,8 @@ export async function swarmSearch(opts) {
   const allReports = [...round1, ...round2];
   const missingSources = unavailableSources(allReports);
   const sourceSummary = summarizeSources(allReports);
-  const status = sourceSummary.failed || allReports.some(r => !r.ok || (r.sourceResult.status !== 'ok_empty' && r.status !== 'ok')) ? 'partial' : 'ok';
+  let status = sourceSummary.failed || allReports.some(r => !r.ok || (r.sourceResult.status !== 'ok_empty' && r.status !== 'ok')) ? 'partial' : 'ok';
+  const russian = /^(ru|russian|рус)/i.test(opts.language || '') || /[а-яё]/i.test(query);
   progress(`synthesizing ${useful1.length + useful2.length} reports with ${synth.provider.id}`);
   const failed = allReports.filter((r) => !r.ok);
   const synthPrompt =
@@ -820,24 +880,46 @@ export async function swarmSearch(opts) {
     gapsBlock(allReports) +
     (ranking?.dropped ? `\n\n${ranking.dropped} of ${ranking.total} files were ranked as least relevant and not read (mention that coverage is partial).` : '');
   const synthRequest = { system: SYNTH_SYSTEM + languageHint, prompt: synthPrompt, web: false };
-  let synthesis = await complete(synthCandidates, synthRequest, 'synthesis');
-  serviceCalls.push(synthesis);
-  let parsed = SYNTH_FORMAT.parse(synthesis.text);
-  if (!parsed.ok) {
-    const { id, text, detail } = parsed.violation;
-    progress(`synthesis: format rule ${id} violated; one correction request`);
-    synthesis = await complete(synthCandidates, {
-      ...synthRequest,
-      prompt: synthPrompt + `\n\nViolated format rule [${id}]: ${text}\nDetail: ${detail}\n` +
-        'Rewrite the complete answer obeying the unchanged FORMAT_RULES_BLOCK. This is the only format correction request.\n' +
-        wrapUntrusted(synthesis.text, dataTag, 'previous synthesis answer'),
-    }, 'synthesis format correction');
+  let synthesis, parsed, synthesisFailure;
+  let synthesisStage = 'synthesis';
+  let synthesisCompleted = false;
+  try {
+    synthesis = await synthesize(synthRequest, synthesisStage, DEFAULTS.synthesisTimeoutMs);
     serviceCalls.push(synthesis);
     parsed = SYNTH_FORMAT.parse(synthesis.text);
+    if (!parsed.ok) {
+      const { id, text, detail } = parsed.violation;
+      progress(`synthesis: format rule ${id} violated; one correction request`);
+      synthesisStage = 'synthesis format correction';
+      synthesis = await synthesize({
+        ...synthRequest,
+        prompt: synthPrompt + `\n\nViolated format rule [${id}]: ${text}\nDetail: ${detail}\n` +
+          'Rewrite the complete answer obeying the unchanged FORMAT_RULES_BLOCK. This is the only format correction request.\n' +
+          wrapUntrusted(synthesis.text, dataTag, 'previous synthesis answer'),
+      }, synthesisStage, DEFAULTS.synthesisCorrectionTimeoutMs);
+      serviceCalls.push(synthesis);
+      parsed = SYNTH_FORMAT.parse(synthesis.text);
+    }
+    synthesisCompleted = true;
+    if (!parsed.ok) synthesisFailure = { stage: synthesisStage, code: 'SYNTHESIS_FORMAT',
+      reason: `${parsed.violation.id}: ${parsed.violation.text} (${parsed.violation.detail})` };
+  } catch (err) {
+    throwIfCancelled();
+    serviceCalls.push({ error: err });
+    synthesisFailure = { stage: synthesisStage, code: err.code || 'SYNTHESIS_FAILED', reason: String(err.message || err) };
   }
-  const { markdown: checkedAnswer, check: sourceCheck } = verifySources(String(synthesis.text || '').trim(), allReports);
-  const answer = markUntrustedSynthesis(checkedAnswer, mode) + (parsed.ok ? '' :
-    `\n\n_Format check: ${parsed.violation.id}: ${parsed.violation.text} (${parsed.violation.detail})._`);
+  const { markdown: checkedAnswer, check: sourceCheck } = verifySources(synthesisCompleted ? String(synthesis.text || '').trim() : '', allReports);
+  let answer = synthesisCompleted ? markUntrustedSynthesis(checkedAnswer, mode) + (parsed.ok ? '' :
+    `\n\n_Format check: ${parsed.violation.id}: ${parsed.violation.text} (${parsed.violation.detail})._`) : '';
+  if (synthesisFailure) {
+    status = 'partial';
+    synthesis ||= { provider: synth.provider.id, model: synth.model };
+    progress(`${synthesisFailure.stage} failed: ${synthesisFailure.reason.replace(/\s+/g, ' ')}; returning raw worker reports`);
+    answer += (answer ? '\n\n' : '') +
+      `${russian ? 'Синтез не выполнен' : 'Synthesis failed'} (${synthesisFailure.stage}).\n` +
+      `${russian ? 'Причина' : 'Reason'}:\n${rawTextBlock(synthesisFailure.reason)}\n\n` +
+      rawWorkerReports(allReports, mode, russian);
+  }
   const usage = summarizeUsage([...serviceCalls, ...allReports], useful1.length + useful2.length);
 
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
@@ -852,7 +934,7 @@ export async function swarmSearch(opts) {
     (mode === 'web' ? ` · status: ${status}` : '') +
     (ranking ? ` · ranked files: ${ranking.kept}/${ranking.total} kept, ${ranking.dropped} dropped` : '') +
     ` · sources traced to worker reports ${sourceCheck.verified}/${sourceCheck.total}` +
-    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synthesis.provider}:${synthesis.model}` +
+    ` · workers on ${familiesUsed.join(', ')} · synthesis: ${synthesisFailure ? `failed (${synthesisFailure.stage})` : `${synthesis.provider}:${synthesis.model}`}` +
     skippedNote +
     ` · ${elapsed}s · ${usageLine(usage)}_`;
 
@@ -862,12 +944,12 @@ export async function swarmSearch(opts) {
     : '';
 
   return {
-    markdown: answer + completenessNote(allReports, missingSources, /^(ru|russian|рус)/i.test(opts.language || '') || /[а-яё]/i.test(query)) +
-      sourceOutcomesNote(allReports, /^(ru|russian|рус)/i.test(opts.language || '') || /[а-яё]/i.test(query)) + attemptsNote + footer,
+    markdown: answer + completenessNote(allReports, missingSources, russian) +
+      sourceOutcomesNote(allReports, russian) + attemptsNote + footer,
     report: {
       query,
       mode,
-      ...(mode === 'web' ? { status } : {}),
+      ...(mode === 'web' || synthesisFailure ? { status } : {}),
       plannedBy,
       rounds,
       round2Mode: rounds === 2 ? round2Mode : null,
@@ -880,6 +962,7 @@ export async function swarmSearch(opts) {
       ranking,
       sourceCheck,
       synthesis: { provider: synthesis.provider, model: synthesis.model },
+      ...(synthesisFailure ? { synthesisFailure } : {}),
       ...(mode === 'files' ? { providerAttempts: attempts } : {}),
       ...(skippedProviders.length ? { skippedProviders } : {}),
       elapsedSec: Number(elapsed),
