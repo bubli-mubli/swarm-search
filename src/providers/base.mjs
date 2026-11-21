@@ -1,5 +1,7 @@
 // Общие утилиты для провайдеров: запуск CLI-процессов и HTTP-запросы к API.
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { readFileSync, readdirSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { delimiter } from 'node:path';
 
@@ -29,15 +31,19 @@ export class ProviderError extends Error {
   }
 }
 
-// Запускает процесс, собирает stdout/stderr, убивает по таймауту.
+// Запускает процесс, собирает stdout/stderr, завершает дерево при остановке.
 export function runProcess(cmd, args, { input, timeoutMs = 180_000, env, signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new ProviderError(`${cmd} aborted`, { stderr: '' }));
+    const processTag = `SWARM_PROCESS_${randomUUID().replaceAll('-', '')}`;
     const child = spawn(cmd, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...env, [processTag]: '1' },
+      detached: process.platform !== 'win32',
     });
     let stdout = '';
     let stderr = '';
+    let inputError;
     let settled = false;
 
     const finish = (fn, value) => {
@@ -48,22 +54,67 @@ export function runProcess(cmd, args, { input, timeoutMs = 180_000, env, signal 
       fn(value);
     };
 
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      finish(reject, new ProviderError(`${cmd} timed out after ${Math.round(timeoutMs / 1000)}s`, { stderr }));
-    }, timeoutMs);
+    const terminateOwnedProcesses = () => {
+      if (child.pid) {
+        if (process.platform === 'win32') {
+          const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+          killer.on('error', () => child.kill('SIGKILL'));
+        } else {
+          try { process.kill(-child.pid, 'SIGKILL'); }
+          catch { child.kill('SIGKILL'); }
+        }
+      }
+      if (process.platform === 'linux') {
+        // Метка переживает setsid.
+        const tag = `${processTag}=1`;
+        try {
+          let killed;
+          do {
+            killed = false;
+            for (const pid of readdirSync('/proc').filter(p => /^\d+$/.test(p))) {
+              try {
+                if (!readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').includes(tag)) continue;
+                process.kill(Number(pid), 'SIGKILL');
+                killed = true;
+              } catch { /* exited/inaccessible */ }
+            }
+          } while (killed); // Повторяем для новых детей.
+        } catch { /* no procfs: group only */ }
+      }
+    };
+
+    const stop = (error) => {
+      if (settled) return;
+      terminateOwnedProcesses();
+      // Освобождаем каналы.
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      finish(reject, error);
+    };
+
+    const timer = setTimeout(() => stop(new ProviderError(`${cmd} timed out after ${Math.round(timeoutMs / 1000)}s`, { stderr })), timeoutMs);
 
     const onAbort = () => {
-      child.kill('SIGKILL');
-      finish(reject, new ProviderError(`${cmd} aborted`, { stderr }));
+      stop(new ProviderError(`${cmd} aborted`, { stderr }));
     };
     signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
+    child.stdin.on('error', (err) => {
+      if (err.code !== 'EPIPE') inputError = err;
+    });
     child.on('error', (err) => finish(reject, new ProviderError(`failed to start ${cmd}: ${err.message}`, { cause: err })));
+    child.on('exit', () => {
+      if (settled) return;
+      clearTimeout(timer);
+      // Основной процесс завершён: убираем потомков, но дочитываем каналы до close.
+      terminateOwnedProcesses();
+    });
     child.on('close', (code) => {
-      if (code === 0) finish(resolve, { stdout, stderr });
+      if (inputError) finish(reject, new ProviderError(`${cmd} stdin: ${inputError.message}`, { cause: inputError, stderr }));
+      else if (code === 0) finish(resolve, { stdout, stderr });
       else finish(reject, new ProviderError(`${cmd} exited with code ${code}`, { stderr: stderr || stdout }));
     });
 
