@@ -1,5 +1,5 @@
 // Общие утилиты для провайдеров: запуск CLI-процессов и HTTP-запросы к API.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
@@ -80,6 +80,24 @@ export function runProcess(cmd, args, { input, timeoutMs = 180_000, env, signal 
             }
           } while (killed); // Повторяем для новых детей.
         } catch { /* no procfs: group only */ }
+      } else if (process.platform === 'darwin') {
+        // Detached descendants can leave the original process group on macOS too.
+        // Match only our random inherited environment marker; never print process environments.
+        const tag = new RegExp(`(?:^|\\s)${processTag}=1(?:\\s|$)`);
+        try {
+          for (let sweep = 0; sweep < 4; sweep++) {
+            const snapshot = spawnSync('/bin/ps', ['eww', '-axo', 'pid=,command='], {
+              encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 1000,
+            });
+            if (snapshot.status !== 0) break;
+            const owned = snapshot.stdout.split('\n').filter(line => tag.test(line))
+              .map(line => Number(line.trim().match(/^\d+/)?.[0])).filter(pid => pid && pid !== process.pid);
+            if (!owned.length) break;
+            for (const pid of owned) {
+              try { process.kill(pid, 'SIGKILL'); } catch { /* exited/inaccessible */ }
+            }
+          }
+        } catch { /* no process table: group only */ }
       }
     };
 

@@ -64,7 +64,33 @@ function pinnedDispatcher(url, addresses) {
   return {
     dispatch(options, handler) {
       let ended = false;
-      const fail = (error) => { if (!ended) { ended = true; handler.onError(error); } };
+      let response;
+      let paused = false;
+      let aborted = false;
+      let reason;
+      const modern = typeof handler.onRequestStart === 'function';
+      // Undici 8 (Node 26) passes controller-based callbacks; older Node uses onConnect/onHeaders.
+      const controller = {
+        rawHeaders: null,
+        rawTrailers: null,
+        pause() { paused = true; response?.pause(); },
+        resume() { paused = false; response?.resume(); },
+        abort(error) {
+          if (aborted) return;
+          aborted = true;
+          reason = error;
+          request.destroy(error instanceof Error ? error : new Error('aborted'));
+        },
+        get paused() { return paused; },
+        get aborted() { return aborted; },
+        get reason() { return reason; },
+      };
+      const fail = (error) => {
+        if (ended) return;
+        ended = true;
+        if (modern) handler.onResponseError(controller, error);
+        else handler.onError(error);
+      };
       const request = (url.protocol === 'https:' ? https : http).request(url, {
         method: options.method,
         headers: options.headers,
@@ -75,13 +101,31 @@ function pinnedDispatcher(url, addresses) {
         },
       });
       request.on('error', fail);
-      request.on('response', (response) => {
+      request.on('response', (incoming) => {
+        response = incoming;
         response.on('error', fail);
-        response.on('data', (chunk) => { if (handler.onData(chunk) === false) response.pause(); });
-        response.on('end', () => { if (!ended) { ended = true; handler.onComplete(response.rawTrailers); } });
-        if (handler.onHeaders(response.statusCode, response.rawHeaders, () => response.resume(), response.statusMessage) === false) response.pause();
+        response.on('data', (chunk) => {
+          if (ended) return;
+          if (modern) handler.onResponseData(controller, chunk);
+          else if (handler.onData(chunk) === false) response.pause();
+        });
+        response.on('end', () => {
+          if (ended) return;
+          ended = true;
+          if (modern) {
+            controller.rawTrailers = response.rawTrailers;
+            handler.onResponseEnd(controller, response.trailers);
+          } else handler.onComplete(response.rawTrailers);
+        });
+        if (modern) {
+          controller.rawHeaders = response.rawHeaders;
+          handler.onResponseStarted?.();
+          handler.onResponseStart(controller, response.statusCode, response.headers, response.statusMessage);
+          if (paused) response.pause();
+        } else if (handler.onHeaders(response.statusCode, response.rawHeaders, () => response.resume(), response.statusMessage) === false) response.pause();
       });
-      handler.onConnect((reason) => request.destroy(reason instanceof Error ? reason : new Error('aborted')));
+      if (modern) handler.onRequestStart(controller);
+      else handler.onConnect((reason) => controller.abort(reason));
       request.end();
       return true;
     },
