@@ -1,0 +1,6 @@
+{
+  "id": "dns-transport",
+  "markdown": "Port 153. Protocols XUDPx and TCProxy are proposed.\n\n## Источники\n1. UDP TCP 53 https://example.net/port53\n\n---\n_swarm-search · workers: 53 · provider: UDP · synthesis: TCP_",
+  "report": { "query": "53 UDP TCP", "workers": [] },
+  "judge": { "score": 0 }
+}

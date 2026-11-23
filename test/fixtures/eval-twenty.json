@@ -1,0 +1,24 @@
+{
+  "answers": [
+    { "id": "rust-1.0", "markdown": "Rust 1.0 was released on May 15, 2015.", "annotation": { "facts": [true] }, "judge": { "score": 1 } },
+    { "id": "postgres-port", "markdown": "The PostgreSQL default TCP port is 5432.", "annotation": { "facts": [true] }, "judge": { "score": 1 } },
+    { "id": "http-429", "markdown": "The status is 429, introduced in RFC 6585.", "annotation": { "facts": [true, true] }, "judge": { "score": 1 } },
+    { "id": "sqlite-license", "markdown": "SQLite's deliverable source is in the public domain.", "annotation": { "facts": [true] }, "judge": { "score": 1 } },
+    { "id": "ipv6-bits", "markdown": "IPv6 addresses contain 128 bits.", "annotation": { "facts": [true] }, "judge": { "score": 1 } },
+    { "id": "json-standard", "markdown": "RFC8259 defines JSON. Exchange outside a closed ecosystem must use UTF8.", "annotation": { "facts": [true, true] }, "judge": { "score": 1 } },
+    { "id": "python-3.0", "markdown": "Python 3.0 final was released on December 3rd, 2008.", "annotation": { "facts": [true] }, "judge": { "score": 1 } },
+    { "id": "redis-port", "markdown": "Redis 7.2's sample configuration specifies port 6379.", "annotation": { "facts": [true] }, "judge": { "score": 1 } },
+    { "id": "git-classic-hash", "markdown": "Classic Git object IDs use SHA1.", "annotation": { "facts": [true] }, "judge": { "score": 1 } },
+    { "id": "http-teapot", "markdown": "The response is 418 I’m a teapot.", "annotation": { "facts": [true, true] }, "judge": { "score": 1 } },
+    { "id": "tls-1.3", "markdown": "TLS 1.3 is specified in rfc-8446.", "annotation": { "facts": [true] }, "judge": { "score": 1 } },
+    { "id": "dns-transport", "markdown": "DNS uses server port 53 with User Datagram Protocol and Transmission Control Protocol.", "annotation": { "facts": [true, true, true] }, "judge": { "score": 1 } },
+    { "id": "websocket-standard", "markdown": "The WebSocket Protocol was standardized by RFC 6455 in 2011.", "annotation": { "facts": [true, true] }, "judge": { "score": 1 } },
+    { "id": "gzip-header", "markdown": "RFC 1952 defines gzip, whose first bytes are 0X1F and 0X8B.", "annotation": { "facts": [true, true, true] }, "judge": { "score": 0 } },
+    { "id": "sha256-bits", "markdown": "A SHA-256 digest contains 256 bits.", "annotation": { "facts": [true] }, "judge": { "score": 0 } },
+    { "id": "uri-standard", "markdown": "The acronym is URI. The generic syntax is defined in RFC 3986.", "annotation": { "facts": [true, true] }, "judge": { "score": 0 } },
+    { "id": "http-not-found", "markdown": "The response is 404 Not Found.", "annotation": { "facts": [true, true] }, "judge": { "score": 0 } },
+    { "id": "xml-1.0", "markdown": "XML 1.0 became a W3C Recommendation on 10 February 1998.", "annotation": { "facts": [true] }, "judge": { "score": 0 } },
+    { "id": "png-compression", "markdown": "PNG uses DEFLATE, a lossless compression algorithm.", "annotation": { "facts": [true, true] }, "judge": { "score": 0 } },
+    { "id": "utf8-max-bytes", "markdown": "UTF-8 needs at most four octets for a Unicode scalar value.", "annotation": { "facts": [true] }, "judge": { "score": 0 } }
+  ]
+}

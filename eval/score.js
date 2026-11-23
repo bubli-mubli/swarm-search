@@ -15,11 +15,11 @@ const urlKey = url => {
   return parsed.href.replace(/\/$/, '');
 };
 
-// Exclude citations, source lists, diagnostics and model names.
 export function answerBody(text = '') {
   if (typeof text !== 'string') throw new Error('Answer text must be a string');
   return text.split(/\n\n---\r?\n_swarm-search/)[0]
     .split(/^[ \t]*(?:#{1,6}[ \t]+)?(?:\*\*)?(?:Sources|References|Источники|Ссылки|Provider sources|Source outcomes|Результаты источников|Unavailable sources|Недоступные источники)(?::?\*\*)?:?[ \t]*$/im)[0]
+    .split(/^#{1,6}[ \t]+(?:Uncertain|Not found|Не найдено|Неопределённость)[ \t]*$/im)[0]
     .replace(/\[([^\]\n]+)\]\(https?:\/\/[^\s)]+\)/g, '$1')
     .replace(/https?:\/\/[^\s<>]+/gi, ' ')
     .replace(/\[\d+(?:\s*[,–-]\s*\d+)*\]/g, ' ')
@@ -57,7 +57,7 @@ function validateQuestions(questions) {
         typeof q.query !== 'string' || !q.query.trim() || queries.has(q.query.trim()) ||
         !Array.isArray(q.facts) || q.facts.length < 1 || q.facts.length > 3 ||
         q.facts.some(f => typeof f !== 'string' || !f.trim()) || new Set(q.facts).size !== q.facts.length) {
-      throw new Error('Each question needs a unique id/query and 1–3 distinct fact strings');
+      throw new Error('Need unique id/query and 1–3 fact strings');
     }
     ids.add(q.id);
     queries.add(q.query.trim());
@@ -81,14 +81,14 @@ function unpack(saved) {
   const report = result.report ?? result.structuredContent ?? {};
   const markdown = result.markdown ?? (Array.isArray(result.content)
     ? result.content.filter(c => c.type === 'text').map(c => c.text).join('\n') : '');
-  return { ...saved, ...result, markdown, report,
+  return { ...result, markdown, report,
     annotation: result.annotation ?? report.annotation, judge: result.judge ?? report.judge };
 }
 
 function factLabels(labels, question, name) {
   if (labels === undefined) return null;
   if (!Array.isArray(labels) || labels.length !== question.facts.length || labels.some(b => typeof b !== 'boolean')) {
-    throw new Error(`${question.id}: ${name}.facts must contain one boolean per required fact`);
+    throw new Error(`${question.id}: ${name}.facts needs ${question.facts.length} booleans`);
   }
   return labels;
 }
@@ -97,7 +97,7 @@ function claimStats(annotation, question) {
   const claims = annotation?.claims;
   if (claims === undefined) return { annotated: false, incorrect: 0, total: 0, rate: null };
   if (!Array.isArray(claims) || claims.some(c => !c || typeof c.text !== 'string' || !c.text.trim() || typeof c.correct !== 'boolean')) {
-    throw new Error(`${question.id}: annotation.claims needs { text, correct: boolean } entries`);
+    throw new Error(`${question.id}: invalid annotation.claims (text/boolean correct required)`);
   }
   const incorrect = claims.filter(c => !c.correct).length;
   return { annotated: true, incorrect, total: claims.length, rate: ratio(incorrect, claims.length) };
@@ -109,7 +109,7 @@ function judgeComparison(answer, question, scored, manual) {
   const labels = factLabels(judge?.facts, question, 'judge');
   const score = typeof judge === 'number' ? judge : judge?.score;
   if (score !== undefined && (typeof score !== 'number' || !Number.isFinite(score) || score < 0 || score > 1)) {
-    throw new Error(`${question.id}: judge score must be between 0 and 1`);
+    throw new Error(`${question.id}: judge score must be in [0, 1]`);
   }
   if (!labels && score === undefined) throw new Error(`${question.id}: judge needs facts or score`);
   const expected = manual ?? scored.facts.map(f => f.found);

@@ -1,0 +1,13 @@
+{
+  "id": "dns-transport",
+  "markdown": "DNS listens on port 53 and uses SCTP [1].\n\n## Sources\n1. https://www.rfc-editor.org/rfc/rfc1035",
+  "report": { "workers": [], "round2": [] },
+  "annotation": {
+    "facts": [true, false, false],
+    "claims": [
+      { "text": "DNS server port is 53.", "correct": true },
+      { "text": "DNS uses SCTP.", "correct": false }
+    ]
+  },
+  "judge": { "facts": [true, true, false], "score": 0.6666666666666666 }
+}
