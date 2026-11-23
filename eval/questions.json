@@ -1,0 +1,159 @@
+[
+  {
+    "id": "rust-1.0",
+    "query": "On what date was Rust 1.0 released?",
+    "facts": ["2015-05-15"],
+    "aliases": { "2015-05-15": ["May 15, 2015", "15 May 2015", "15 мая 2015"] },
+    "source": "https://blog.rust-lang.org/2015/05/15/Rust-1.0/",
+    "allowedUrls": ["https://blog.rust-lang.org/2015/05/15/Rust-1.0/"]
+  },
+  {
+    "id": "postgres-port",
+    "query": "What is PostgreSQL's default TCP port?",
+    "facts": ["5432"],
+    "source": "https://www.postgresql.org/docs/17/runtime-config-connection.html",
+    "allowedUrls": ["https://www.postgresql.org/docs/17/runtime-config-connection.html"]
+  },
+  {
+    "id": "http-429",
+    "query": "Which HTTP status code means Too Many Requests, and which RFC introduced it?",
+    "facts": ["429", "RFC 6585"],
+    "aliases": { "RFC 6585": ["RFC6585", "RFC-6585"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc6585",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc6585", "https://www.rfc-editor.org/rfc/rfc6585.html"]
+  },
+  {
+    "id": "sqlite-license",
+    "query": "What legal status does SQLite's deliverable source code have?",
+    "facts": ["public domain"],
+    "aliases": { "public domain": ["общественное достояние", "общественном достоянии"] },
+    "source": "https://www.sqlite.org/copyright.html",
+    "allowedUrls": ["https://www.sqlite.org/copyright.html"]
+  },
+  {
+    "id": "ipv6-bits",
+    "query": "How many bits long is an IPv6 address?",
+    "facts": ["128"],
+    "source": "https://www.rfc-editor.org/rfc/rfc4291",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc4291", "https://www.rfc-editor.org/rfc/rfc4291.html"]
+  },
+  {
+    "id": "json-standard",
+    "query": "Which December 2017 RFC defines JSON, and what encoding does it require for exchange outside a closed ecosystem?",
+    "facts": ["RFC 8259", "UTF-8"],
+    "aliases": { "RFC 8259": ["RFC8259", "RFC-8259"], "UTF-8": ["UTF8", "UTF 8"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc8259",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc8259", "https://www.rfc-editor.org/rfc/rfc8259.html"]
+  },
+  {
+    "id": "python-3.0",
+    "query": "On what date was Python 3.0 released?",
+    "facts": ["2008-12-03"],
+    "aliases": { "2008-12-03": ["December 3, 2008", "December 3rd, 2008", "3 December 2008", "3 декабря 2008"] },
+    "source": "https://www.python.org/download/releases/3.0/",
+    "allowedUrls": ["https://www.python.org/download/releases/3.0/"]
+  },
+  {
+    "id": "redis-port",
+    "query": "What TCP port does the unmodified Redis 7.2 sample configuration use?",
+    "facts": ["6379"],
+    "source": "https://raw.githubusercontent.com/redis/redis/7.2.0/redis.conf",
+    "allowedUrls": ["https://raw.githubusercontent.com/redis/redis/7.2.0/redis.conf", "https://github.com/redis/redis/blob/7.2.0/redis.conf"]
+  },
+  {
+    "id": "git-classic-hash",
+    "query": "Which hash algorithm does Git use for object IDs in classic repositories, before the SHA-256 transition?",
+    "facts": ["SHA-1"],
+    "aliases": { "SHA-1": ["SHA1", "SHA 1"] },
+    "source": "https://git-scm.com/docs/hash-function-transition",
+    "allowedUrls": ["https://git-scm.com/docs/hash-function-transition"]
+  },
+  {
+    "id": "http-teapot",
+    "query": "In RFC 2324, what response code and reason phrase indicate an attempt to brew coffee with a teapot?",
+    "facts": ["418", "I'm a teapot"],
+    "aliases": { "I'm a teapot": ["I am a teapot", "я чайник"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc2324",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc2324", "https://www.rfc-editor.org/rfc/rfc2324.html"]
+  },
+  {
+    "id": "tls-1.3",
+    "query": "Which RFC published in August 2018 specifies TLS 1.3?",
+    "facts": ["RFC 8446"],
+    "aliases": { "RFC 8446": ["RFC8446", "RFC-8446"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc8446",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc8446", "https://www.rfc-editor.org/rfc/rfc8446.html"]
+  },
+  {
+    "id": "dns-transport",
+    "query": "According to RFC 1035, which server port and two Internet transport protocols does DNS use?",
+    "facts": ["53", "UDP", "TCP"],
+    "aliases": { "UDP": ["User Datagram Protocol"], "TCP": ["Transmission Control Protocol"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc1035",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc1035", "https://www.rfc-editor.org/rfc/rfc1035.html"]
+  },
+  {
+    "id": "websocket-standard",
+    "query": "Which RFC first standardized the WebSocket protocol, and in which year was it published?",
+    "facts": ["RFC 6455", "2011"],
+    "aliases": { "RFC 6455": ["RFC6455", "RFC-6455"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc6455",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc6455", "https://www.rfc-editor.org/rfc/rfc6455.html"]
+  },
+  {
+    "id": "gzip-header",
+    "query": "Which RFC defines the gzip file format, and what are its first two identification bytes in hexadecimal?",
+    "facts": ["RFC 1952", "0x1f", "0x8b"],
+    "aliases": { "RFC 1952": ["RFC1952", "RFC-1952"], "0x1f": ["1F"], "0x8b": ["8B"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc1952",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc1952", "https://www.rfc-editor.org/rfc/rfc1952.html"]
+  },
+  {
+    "id": "sha256-bits",
+    "query": "How many bits are in a SHA-256 digest?",
+    "facts": ["256 bits"],
+    "aliases": { "256 bits": ["256-bit", "256 бит", "256 бита"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc6234",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc6234", "https://www.rfc-editor.org/rfc/rfc6234.html"]
+  },
+  {
+    "id": "uri-standard",
+    "query": "What is the acronym for Uniform Resource Identifier, and which January 2005 RFC defines its generic syntax?",
+    "facts": ["URI", "RFC 3986"],
+    "aliases": { "RFC 3986": ["RFC3986", "RFC-3986"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc3986",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc3986", "https://www.rfc-editor.org/rfc/rfc3986.html"]
+  },
+  {
+    "id": "http-not-found",
+    "query": "Which HTTP status code and English reason phrase indicate that the origin server did not find a current representation of the target resource?",
+    "facts": ["404", "Not Found"],
+    "aliases": { "Not Found": ["не найдено", "не найден"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.5",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc9110", "https://www.rfc-editor.org/rfc/rfc9110.html", "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.5"]
+  },
+  {
+    "id": "xml-1.0",
+    "query": "On what date did XML 1.0 first become a W3C Recommendation?",
+    "facts": ["1998-02-10"],
+    "aliases": { "1998-02-10": ["10 February 1998", "10-February-1998", "February 10, 1998", "10 февраля 1998"] },
+    "source": "https://www.w3.org/TR/1998/REC-xml-19980210",
+    "allowedUrls": ["https://www.w3.org/TR/1998/REC-xml-19980210"]
+  },
+  {
+    "id": "png-compression",
+    "query": "Which compression algorithm does PNG use, and is the compression lossy or lossless?",
+    "facts": ["DEFLATE", "lossless"],
+    "aliases": { "lossless": ["без потерь"] },
+    "source": "https://www.w3.org/TR/2003/REC-PNG-20031110/",
+    "allowedUrls": ["https://www.w3.org/TR/2003/REC-PNG-20031110/"]
+  },
+  {
+    "id": "utf8-max-bytes",
+    "query": "Under RFC 3629, what is the maximum number of octets used to encode one Unicode scalar value in UTF-8?",
+    "facts": ["4"],
+    "aliases": { "4": ["four", "четыре", "четырёх"] },
+    "source": "https://www.rfc-editor.org/rfc/rfc3629",
+    "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc3629", "https://www.rfc-editor.org/rfc/rfc3629.html"]
+  }
+]

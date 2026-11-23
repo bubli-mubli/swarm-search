@@ -1,0 +1,23 @@
+{
+  "markdown": "DNS servers listen on port **53** over both **UDP** and **TCP** [1].\n\n## Sources\n1. https://www.rfc-editor.org/rfc/rfc1035\n\n---\n_swarm-search · workers: 2 · synthesis: fixture_",
+  "report": {
+    "query": "According to RFC 1035, which server port and two Internet transport protocols does DNS use?",
+    "workers": [
+      { "id": "w1", "ok": true, "provider": "fixture", "model": "udp", "text": "## Findings\n- DNS uses port 53 and UDP (https://www.rfc-editor.org/rfc/rfc1035).\n## Uncertain\n- TCP was not investigated." },
+      { "id": "w2", "ok": true, "provider": "fixture", "model": "tcp", "text": "## Findings\n- TCP is a DNS transport (https://www.rfc-editor.org/rfc/rfc1035).\n## Uncertain\n- none" }
+    ],
+    "round2": [
+      { "id": "r2-1", "ok": true, "provider": "UDP", "model": "TCP", "text": "NOTHING RELEVANT" },
+      { "id": "r2-2", "ok": false, "provider": "fixture", "text": "53 UDP TCP", "error": "failed" }
+    ]
+  },
+  "annotation": {
+    "facts": [true, true, true],
+    "claims": [
+      { "text": "DNS server port is 53.", "correct": true },
+      { "text": "DNS uses UDP.", "correct": true },
+      { "text": "DNS uses TCP.", "correct": true }
+    ]
+  },
+  "judge": { "facts": [true, true, true] }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "dns-transport",
+  "markdown": " \n\n---\n_swarm-search · workers: 53 · provider: UDP · synthesis: TCP_",
+  "report": {
+    "query": "53 UDP TCP",
+    "workers": [{ "id": "w1", "ok": true, "text": "DNS uses 53 UDP TCP." }]
+  },
+  "annotation": { "facts": [false, false, false], "claims": [] },
+  "judge": { "facts": [false, false, false] }
+}
