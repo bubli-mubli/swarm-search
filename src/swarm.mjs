@@ -19,10 +19,13 @@ export const DEFAULTS = {
   maxAutoWorkers: Number(process.env.SWARM_MAX_AUTO_WORKERS) || 8,
   timeoutMs: Number(process.env.SWARM_TIMEOUT_MS) || 180_000,
   // Пределы оркестратора: попытка провайдера, вся цепочка синтеза и вся цепочка коррекции.
-  synthesisAttemptTimeoutMs: 30_000,
-  synthesisTimeoutMs: 60_000,
+  // Сводка по 10+ отчётам на CLI-провайдерах идёт дольше минуты — 30/60 с обрывали её на больших корпусах.
+  synthesisAttemptTimeoutMs: Number(process.env.SWARM_SYNTH_ATTEMPT_TIMEOUT_MS) || 120_000,
+  synthesisTimeoutMs: Number(process.env.SWARM_SYNTH_TIMEOUT_MS) || 180_000,
   synthesisCorrectionTimeoutMs: 30_000,
   shardChars: Number(process.env.SWARM_SHARD_CHARS) || 60_000,
+  // Потолок шарда при явном --workers N: корпус делится на N частей, а не на куски по shardChars.
+  fixedShardChars: Number(process.env.SWARM_FIXED_SHARD_CHARS) || 240_000,
   rounds: Number(process.env.SWARM_ROUNDS) || 1,
   round2: process.env.SWARM_ROUND2 || 'gaps',
   // Ранжирование файлов: auto — только когда корпус больше rankChars, on — всегда, off — никогда.
@@ -701,10 +704,11 @@ export async function swarmSearch(opts) {
       files = ranked.files;
       progress(`ranked ${ranking.total} files by relevance: kept ${ranking.kept}, dropped ${ranking.dropped} (budget ${DEFAULTS.rankChars} chars)`);
     }
-    // При фиксированном N маленький корпус режем мельче, чтобы занять всех воркеров; нижняя граница — 8k символов.
+    // При фиксированном N корпус делится на N шардов (вызовов воркеров ровно N, пока шард влезает в fixedShardChars);
+    // маленький корпус режется мельче, нижняя граница — 8k символов.
     const totalChars = files.reduce((sum, f) => sum + f.size, 0);
     const maxChars = fixedWorkers
-      ? Math.max(8_000, Math.min(DEFAULTS.shardChars, Math.ceil(totalChars / fixedWorkers)))
+      ? Math.max(8_000, Math.min(DEFAULTS.fixedShardChars, Math.ceil(totalChars / fixedWorkers)))
       : DEFAULTS.shardChars;
     const shards = await buildShards(files, { maxChars });
     if (!shards.length) throw new Error('no readable text files found under given paths');
