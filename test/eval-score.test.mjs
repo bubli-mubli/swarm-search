@@ -79,6 +79,12 @@ test('source-only prose, URLs, citations and footer cannot supply required facts
   assert.equal(scoreText('53.5 and 1,53 are bigger numbers.', dns).found, 0);
 });
 
+test('echoing the SHA-256 algorithm name does not answer the digest-width question', () => {
+  const sha = questions.find(q => q.id === 'sha256-bits');
+  assert.equal(scoreText('The algorithm is SHA-256.', sha).found, 0);
+  assert.equal(scoreText('It produces a 256-bit digest.', sha).coverage, 1);
+});
+
 test('FAILS_ON_OLD 874: twenty-question fixture reaches 31/31 and rejects judge at 65%', () => {
   const result = scoreSaved(load('twenty'), questions, { judgeDiff: true });
   assert.equal(result.overall.found, 31);

@@ -334,12 +334,32 @@ node bin/swarm-search.mjs providers
 node bin/swarm-search.mjs run "..." --workers 2
 ```
 
-### Saved swarm output
+### Offline fact evaluation
 
 The pipeline returns `{ markdown, report }` in `src/swarm.mjs`; `report.workers` and
 `report.round2` contain worker text and extracted `facts`. The CLI's `run --json` saves this
 envelope. MCP returns the answer in `content` and the report in `structuredContent`.
 Tests live in `test/*.test.mjs` and run with `npm test`.
+
+`eval/questions.json` contains 20 stable questions, required fact strings, aliases and official
+source URLs. Score existing output without calling any provider:
+
+```bash
+node eval/score.js saved.json --judge-diff
+node eval/score.js test/fixtures/eval-twenty.json --judge-diff  # fixture: 31/31 facts, judge agreement 65%
+```
+
+A single CLI/MCP answer is matched by `report.query`; use `--question id` to select it explicitly.
+A batch is `{ "answers": [{ "id": "dns-transport", "markdown": "...", "report": {} }] }`;
+missing questions score zero. Coverage uses literal facts/aliases, excluding source lists,
+citations and diagnostics; worker rounds are scored separately. Unexpected URLs are listed.
+Optional `annotation.facts` and `judge.facts` are boolean arrays in the question's fact order;
+`judge.score` can instead be a number from 0 to 1. `--judge-diff` compares against manual labels
+when present, otherwise literal matches. Only all 20 manually labelled answers with judge scores
+produce a suitability verdict: below 70% agreement means `unsuitable`; incomplete data means
+`insufficient_data`. To measure incorrect claims, enumerate every assertion in
+`annotation.claims` as `{ "text": "...", "correct": true }` (or `false`); the error rate uses
+annotated claims only, with `annotatedQuestions` showing coverage. Without claims it is `null`.
 
 ### Provider benchmark
 

@@ -111,7 +111,8 @@
   {
     "id": "sha256-bits",
     "query": "How many bits are in a SHA-256 digest?",
-    "facts": ["256"],
+    "facts": ["256 bits"],
+    "aliases": { "256 bits": ["256-bit", "256 бит", "256 бита"] },
     "source": "https://www.rfc-editor.org/rfc/rfc6234",
     "allowedUrls": ["https://www.rfc-editor.org/rfc/rfc6234", "https://www.rfc-editor.org/rfc/rfc6234.html"]
   },
