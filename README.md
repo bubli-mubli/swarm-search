@@ -334,6 +334,13 @@ node bin/swarm-search.mjs providers
 node bin/swarm-search.mjs run "..." --workers 2
 ```
 
+### Saved swarm output
+
+The pipeline returns `{ markdown, report }` in `src/swarm.mjs`; `report.workers` and
+`report.round2` contain worker text and extracted `facts`. The CLI's `run --json` saves this
+envelope. MCP returns the answer in `content` and the report in `structuredContent`.
+Tests live in `test/*.test.mjs` and run with `npm test`.
+
 ### Provider benchmark
 
 Before switching the cheap default model, compare providers on a fixed set: `bench/questions.json`
