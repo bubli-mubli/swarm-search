@@ -2,10 +2,11 @@
 // и Streamable HTTP (ChatGPT connectors и любой удалённый клиент).
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
+import { createRequire } from 'node:module';
 import { swarmSearch, DEFAULTS } from './swarm.mjs';
 import { detectAvailable, PROVIDERS } from './providers/index.mjs';
 
-export const SERVER_INFO = { name: 'swarm-search', version: '0.2.0' };
+export const SERVER_INFO = { name: 'swarm-search', version: createRequire(import.meta.url)('../package.json').version };
 const PROTOCOL_VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
