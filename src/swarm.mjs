@@ -367,7 +367,7 @@ function* fallbackUrlSpans(text) {
     let depth = 0;
     for (; end < text.length; end++) {
       const char = text[end];
-      if (char === quoteEnd || /[\s"`<>]/.test(char) || (char === "'" && !quoteEnd)) break;
+      if (char === quoteEnd || /[\s<>]/.test(char)) break;
       if (char === '(') depth++;
       else if (char === ')') {
         if (!depth) break;
