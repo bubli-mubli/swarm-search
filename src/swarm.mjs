@@ -4,7 +4,7 @@ import { collectFiles, assertPathsAllowed, buildShards, rankFiles } from './corp
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { verifyWorkerSources, sourceEvidence, stripVerification, verificationMark } from './web-verification.mjs';
-import { responseFormat, extractRefs } from './response-format.mjs';
+import { responseFormat, extractRefs, PATH_LINE_RE, URL_RE } from './response-format.mjs';
 export { extractRefs } from './response-format.mjs';
 import { workerSources } from './web-sources.mjs';
 import { sourceStatus, synthesisReportText, reportProvenance, unavailableSources, completenessNote,
@@ -321,6 +321,60 @@ function refInReports(ref, index) {
   if (isUrl(ref)) return index.urls.has(ref.replace(/\/+$/, ''));
   const { path, from, to } = parsePathRef(ref);
   return (index.ranges.get(path) || []).some(([a, b]) => from >= a && to <= b);
+}
+
+function shardRanges({ text, chars, files }, limit = text.length, ranges = new Map()) {
+  const shown = text.slice(0, limit);
+  shown.slice(0, shown.lastIndexOf('\n') + 1).trimEnd().split('\n\n').forEach((block, offset) => {
+    const [header, ...lines] = block.split('\n');
+    const name = files[offset];
+    if (!lines.length || header !== `===== FILE: ${name} =====`) return;
+    const path = chars === text.length ? name : name.replace(/ \(part \d+\)$/, '');
+    if (!ranges.has(path)) ranges.set(path, []);
+    ranges.get(path).push([parseInt(lines[0], 10), parseInt(lines.at(-1), 10)]);
+  });
+  return ranges;
+}
+
+function fileFallback(reports, shards, followups, cap, russian) {
+  const followup = new Map();
+  for (const shard of followups) {
+    if (cap <= 0) break;
+    shardRanges(shard, cap, followup);
+    cap -= shard.text.length + 1;
+  }
+  const refs = new Map(), items = new Set();
+  const pattern = new RegExp(`${URL_RE.source}|${PATH_LINE_RE.source}`, 'gi');
+  for (const report of reports) {
+    if (items.size === 12) break;
+    if (!report.ok) continue;
+    const shard = shards[report.id - 1];
+    const ranges = shard ? shardRanges(shard) : followup;
+    const section = report.text.split(/^[ \t]*#{1,6}[ \t]+/m).find(part => /^Findings\s*\n/i.test(part));
+    for (const line of section?.split('\n').slice(1) ?? []) {
+      if (items.size === 12) break;
+      if (!ITEM_START.test(line)) continue;
+      const cited = new Set();
+      const text = line.replace(pattern, (ref, offset) => {
+        if (isUrl(ref) || !/[\s([`'"<]/.test(line[offset - 1] ?? ' ') ||
+          !/[\s,;.)\]`'">]/.test(line[offset + ref.length] ?? ' ')) return '';
+        const { path, from, to } = parsePathRef(ref);
+        if (from <= to && ranges.get(path)?.some(([first, last]) => from >= first && to <= last)) cited.add(ref);
+        return '';
+      }).replace(ITEM_START, '').replace(/\([\s,;]*\)/g, '').trim().slice(0, 360)
+        .replace(/[&<>\[\]`\\\r]/g, char => `&#${char.charCodeAt(0)};`);
+      if (!text || !cited.size) continue;
+      const citations = [...cited].map(ref => {
+        if (!refs.has(ref)) refs.set(ref, refs.size + 1);
+        return `[${refs.get(ref)}]`;
+      });
+      items.add(`- ${text} ${citations.join(' ')}`);
+    }
+  }
+  const note = russian ? 'Неполный ответ: выводы не сверены.' : 'Incomplete answer: claims were not verified.';
+  if (!refs.size) return `${note} ${russian ? 'Нет сверенных ссылок.' : 'No checked file citations.'}`;
+  return [note, '', ...items, '', russian ? '## Источники' : '## Sources',
+    ...[...refs].map(([ref, number]) => `${number}. ${ref}`)].join('\n');
 }
 
 const NOT_FOUND_MARK = ' — **source not found in worker reports**';
@@ -689,7 +743,7 @@ export async function swarmSearch(opts) {
   let jobs = [];
   let concurrency;
   let plannedBy = fixedWorkers ? 'fixed' : 'auto';
-  let shardTexts = [];
+  let shards, followupShards = [], followupCap;
   let ranking = null;
   if (mode === 'files') {
     if (!paths.length) throw new Error('mode=files requires paths');
@@ -710,11 +764,10 @@ export async function swarmSearch(opts) {
     const maxChars = fixedWorkers
       ? Math.max(8_000, Math.min(DEFAULTS.fixedShardChars, Math.ceil(totalChars / fixedWorkers)))
       : DEFAULTS.shardChars;
-    const shards = await buildShards(files, { maxChars });
+    shards = await buildShards(files, { maxChars });
     if (!shards.length) throw new Error('no readable text files found under given paths');
     concurrency = fixedWorkers ?? Math.min(shards.length, DEFAULTS.maxAutoWorkers);
     progress(`${files.length} files → ${shards.length} shards, ${concurrency} parallel workers`);
-    shardTexts = shards.map((s) => s.text);
     jobs = shards.map((shard, i) => ({
       id: i + 1,
       label: `shard ${i + 1}: ${shard.files.slice(0, 3).join(', ')}${shard.files.length > 3 ? ` +${shard.files.length - 3}` : ''}`,
@@ -808,8 +861,9 @@ export async function swarmSearch(opts) {
         let context = '';
         if (mode === 'files') {
           // Дозакрываем по шардам, где что-то нашлось; режем по общему лимиту, чтобы не раздуть промпт.
-          const relevant = useful1.map((r) => shardTexts[r.id - 1]).filter(Boolean).join('\n');
-          const cap = DEFAULTS.shardChars * 2;
+          followupShards = useful1.map(r => shards[r.id - 1]);
+          const relevant = followupShards.map(shard => shard.text).join('\n');
+          const cap = followupCap = DEFAULTS.shardChars * 2;
           context = wrapUntrusted(relevant.length > cap ? relevant.slice(0, cap) + '\n[... truncated ...]' : relevant, dataTag, 'files of relevant shards');
         }
         const jobs2 = followups.map((fq, i) => ({
@@ -913,8 +967,9 @@ export async function swarmSearch(opts) {
     serviceCalls.push({ error: err });
     synthesisFailure = { stage: synthesisStage, code: err.code || 'SYNTHESIS_FAILED', reason: String(err.message || err) };
   }
-  const { markdown: checkedAnswer, check: sourceCheck } = verifySources(synthesisCompleted ? String(synthesis.text || '').trim() : '', allReports);
-  let answer = synthesisCompleted ? markUntrustedSynthesis(checkedAnswer, mode) + (parsed.ok ? '' :
+  const fallback = mode === 'files' && synthesisFailure && fileFallback(allReports, shards, followupShards, followupCap, russian);
+  const { markdown: checkedAnswer, check: sourceCheck } = verifySources(fallback || (synthesisCompleted ? synthesis.text.trim() : ''), allReports);
+  let answer = synthesisCompleted || fallback ? markUntrustedSynthesis(checkedAnswer, mode) + (!synthesisCompleted || parsed.ok ? '' :
     `\n\n_Format check: ${parsed.violation.id}: ${parsed.violation.text} (${parsed.violation.detail})._`) : '';
   if (synthesisFailure) {
     status = 'partial';

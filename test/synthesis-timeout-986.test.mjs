@@ -4,6 +4,7 @@ import { getEventListeners } from 'node:events';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { execFile } from 'node:child_process';
+import { promises as dns } from 'node:dns';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { swarmSearch, DEFAULTS } from '../src/swarm.mjs';
@@ -77,6 +78,89 @@ function assertRaw(result, stage) {
     if (report.ok) assert.ok(result.markdown.includes(report.text), `raw report ${report.id} must be retained intact`);
   }
 }
+
+for (const confirmed of [true, false]) {
+  test(`1307: files synthesis failure ${confirmed ? 'keeps a checked citation' : 'reports no checked citations'}`, async t => {
+    const f = fixture(t);
+    const lookup = t.mock.method(dns, 'lookup', async () => assert.fail('no DNS calls in files mode'));
+    const text = '## Findings\n' +
+      (confirmed ? '- LOCAL_1307 (output-provenance.mjs:3-5, invented.mjs:1)\n' : '') +
+      '- OUTSIDE_1307 (output-provenance.mjs:55-99)\n' +
+      '- REVERSED_1307 (output-provenance.mjs:9-2)\n' +
+      '- ABSOLUTE_1307 (/output-provenance.mjs:7)\n' +
+      '- UNSEEN_1307 (base.mjs:35)\n## Not found\n- UNCERTAIN_1307 (output-provenance.mjs:1)';
+    const primary = t.mock.method(byId['arcodex-cli'], 'complete', async request => {
+      assert.equal(request.web, false);
+      if (request.system.startsWith('You are the synthesizer')) throw new Error('fixture connection refused');
+      assert.match(request.prompt, /===== FILE: output-provenance\.mjs =====\n +1\|/);
+      return { text };
+    });
+    const backup = t.mock.method(byId['codex-cli'], 'complete', async request => {
+      assert.equal(request.web, false);
+      assert.match(request.system, /^You are the synthesizer/);
+      throw new ProviderError('fixture no credits', { status: 402 });
+    });
+    const result = await within(t, swarmSearch({ ...f.options, paths: ['src/output-provenance.mjs'] }));
+    assertRaw(result, 'synthesis');
+    assert.equal(result.report.status, 'partial');
+    assert.equal(result.report.workers.length, 1);
+    assert.equal(result.report.workers[0].text, text);
+    assert.equal(primary.mock.callCount(), 2, 'one worker and one synthesis attempt');
+    assert.equal(backup.mock.callCount(), 1, 'one existing backup synthesis attempt');
+    assert.equal(lookup.mock.callCount(), 0);
+    const summary = result.markdown.split('## Raw worker reports')[0];
+    assert.equal(result.report.sourceCheck.verified, Number(confirmed));
+    assert.equal(result.report.sourceCheck.total, Number(confirmed));
+    assert.match(summary, /incomplete/i);
+    assert.doesNotMatch(summary, /OUTSIDE_1307|REVERSED_1307|ABSOLUTE_1307|UNSEEN_1307|UNCERTAIN_1307|invented\.mjs:1/);
+    if (confirmed) {
+      assert.match(summary, /LOCAL_1307[^\n]*\[1\]/);
+      assert.match(summary, /^1\. output-provenance\.mjs:3-5\b/m);
+      assert.match(summary, /claims (?:were |are )?not verified/i);
+    } else {
+      assert.match(summary, /no checked file citations/i);
+    }
+  });
+}
+
+test('1307: files format failure checks references against each worker’s displayed slice', async t => {
+  const f = fixture(t, { available: ['arcodex-cli'], limits: { shardChars: 100, fixedShardChars: 8_000 } });
+  const calls = [];
+  t.mock.method(byId['arcodex-cli'], 'complete', async request => {
+    if (request.system.startsWith('You audit')) {
+      calls.push('audit');
+      return { text: '{"followups":["Check context"]}' };
+    }
+    if (request.system.startsWith('You are the synthesizer')) {
+      calls.push('synthesis');
+      return { text: 'MALFORMED_1307 [2].\n## Sources\n1. base.mjs:178' };
+    }
+    if (request.prompt.includes('files of relevant shards')) {
+      calls.push('follow-up');
+      assert.match(request.prompt, / +2\|.*\n/);
+      assert.doesNotMatch(request.prompt, / +35\|/);
+      return { text: '## Findings\n- FOLLOWUP_1307 (base.mjs:2)\n- CUT_1307 (base.mjs:35)\n## Not found\n- none' };
+    }
+    calls.push('worker');
+    if (request.prompt.includes('base.mjs (part 2)')) {
+      assert.match(request.prompt, / +178\|/);
+      return { text: 'NOTHING RELEVANT.' };
+    }
+    assert.match(request.prompt, /base\.mjs \(part 1\)/);
+    assert.doesNotMatch(request.prompt, / +178\|/);
+    return { text: '## Findings\n- SHARD_1307 (base.mjs:1)\n- OTHER_SHARD_1307 (base.mjs:178)\n## Not found\n- none' };
+  });
+  const result = await within(t, swarmSearch({ ...f.options, rounds: 2, round2: 'gaps' }));
+  assertRaw(result, 'synthesis format correction');
+  assert.equal(result.report.synthesisFailure.code, 'SYNTHESIS_FORMAT');
+  assert.deepEqual(calls, ['worker', 'worker', 'audit', 'follow-up', 'synthesis', 'synthesis']);
+  assert.equal(result.report.sourceCheck.verified, 2);
+  assert.equal(result.report.sourceCheck.total, 2);
+  const summary = result.markdown.split('## Raw worker reports')[0];
+  assert.match(summary, /SHARD_1307[^\n]*\[1\]/);
+  assert.match(summary, /FOLLOWUP_1307[^\n]*\[2\]/);
+  assert.doesNotMatch(summary, /MALFORMED_1307|OTHER_SHARD_1307|CUT_1307|base\.mjs:(35|178)\b/);
+});
 
 test('FAILS_ON_OLD 986: arcodex failure, citations violation and unresponsive correction return raw reports', async t => {
   const f = fixture(t);
