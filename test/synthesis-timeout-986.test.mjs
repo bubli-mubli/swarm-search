@@ -123,6 +123,58 @@ for (const confirmed of [true, false]) {
   });
 }
 
+async function fileCitationFallback(t, path, reference, status = 'ok') {
+  const f = fixture(t, { available: ['arcodex-cli'] });
+  const lookup = t.mock.method(dns, 'lookup', async () => assert.fail('no DNS calls in files mode'));
+  const text = `## Findings\n- FINDING_1307 (${reference})\n## Not found\n- none`;
+  const complete = t.mock.method(byId['arcodex-cli'], 'complete', async request => {
+    assert.equal(request.web, false);
+    if (request.system.startsWith('You are the synthesizer')) throw new Error('fixture connection refused');
+    assert.ok(request.prompt.includes(`===== FILE: ${path.split('/').at(-1)} =====\n`));
+    return { text, status };
+  });
+  const result = await within(t, swarmSearch({ ...f.options, paths: [path] }));
+  assert.equal(result.report.status, 'partial');
+  assert.equal(result.report.synthesisFailure.stage, 'synthesis');
+  assert.equal(result.report.workers[0].text, text);
+  assert.equal(complete.mock.callCount(), 2, 'one worker and one synthesis attempt');
+  assert.equal(lookup.mock.callCount(), 0);
+  const summary = result.markdown.split('## Raw worker reports')[0];
+  assert.match(summary, /incomplete/i);
+  return { report: result.report, summary };
+}
+
+for (const [scenario, path, reference, verified] of [
+  ['does not match a path by suffix', 'src/output-provenance.mjs', 'archive/old output-provenance.mjs:3-5', 0],
+  ['checks the end of a spaced line range', 'src/output-provenance.mjs', 'output-provenance.mjs:3 - 9000', 0],
+  ['accepts a displayed file without an extension', 'LICENSE', 'LICENSE:1-3', 1],
+]) {
+  test(`FAILS_ON_OLD 1307: files fallback ${scenario}`, async t => {
+    const { report, summary } = await fileCitationFallback(t, path, reference);
+    assert.equal(report.sourceCheck.verified, verified, reference);
+    assert.equal(report.sourceCheck.total, verified);
+    if (verified) {
+      assert.match(summary, /FINDING_1307[^\n]*\[1\]/);
+      assert.match(summary, /^1\. LICENSE:1-3\b/m);
+    } else {
+      assert.doesNotMatch(summary, /FINDING_1307/);
+      assert.match(summary, /no checked file citations/i);
+    }
+  });
+}
+
+test('FAILS_ON_OLD 1307: files fallback omits unavailable reports even when the call succeeded', async t => {
+  const { report, summary } = await fileCitationFallback(t, 'src/output-provenance.mjs', 'output-provenance.mjs:3-5', 'unavailable');
+  assert.equal(report.workers[0].ok, true);
+  assert.equal(report.workers[0].status, 'unavailable');
+  assert.equal(report.sourceSummary.found, 0);
+  assert.equal(report.sourceSummary.failed, 1);
+  assert.equal(report.sourceCheck.verified, 0);
+  assert.equal(report.sourceCheck.total, 0);
+  assert.doesNotMatch(summary, /FINDING_1307/);
+  assert.match(summary, /no checked file citations/i);
+});
+
 test('1307: files format failure checks references against each worker’s displayed slice', async t => {
   const f = fixture(t, { available: ['arcodex-cli'], limits: { shardChars: 100, fixedShardChars: 8_000 } });
   const calls = [];
