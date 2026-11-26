@@ -323,6 +323,159 @@ function refInReports(ref, index) {
   return (index.ranges.get(path) || []).some(([a, b]) => from >= a && to <= b);
 }
 
+function shardRanges(shards, cap = Infinity) {
+  const ranges = new Map();
+  for (const { text, files, chars } of shards) {
+    const blocks = text.slice(0, text.lastIndexOf('\n', cap - 1) + 1).trimEnd().split('\n\n');
+    for (const name of files) {
+      const lines = blocks.shift()?.split('\n');
+      if (!lines?.[1]) break;
+      const path = chars < text.length ? name.replace(/ \(part \d+\)$/, '') : name;
+      if (!ranges.has(path)) ranges.set(path, []);
+      ranges.get(path).push([parseInt(lines[1], 10), parseInt(lines.at(-1), 10)]);
+    }
+    if ((cap -= text.length + 1) <= 0) break;
+  }
+  return ranges;
+}
+
+const FILE_LINES = String.raw`:(\d+)(?:\s*[-–]\s*(\d+))?`;
+const FILE_REF = new RegExp(String.raw`^\x60?([^\x60]+)${FILE_LINES}\x60?$`, 'u');
+const INLINE_FILE_REF = new RegExp(String.raw`(?:\x60[^:\x60]+|[\p{L}\p{N}_.@~/\\-]+(?: \([^()]*\))?)${FILE_LINES}\x60?`, 'gu');
+const LIST_REF_END = String.raw`(?=\s*(?:[,;]|$))`;
+const LIST_FILE_LINES = new RegExp(String.raw`^${FILE_LINES}${LIST_REF_END}`);
+const LIST_TOKEN = new RegExp(String.raw`^(?:\x60[^\x60]*\x60|[^\x60]+?${FILE_LINES})${LIST_REF_END}`);
+const FALLBACK_URL_START = /(\([ \t]*)?(["'`<])?https?:\/\//gi;
+const escapeFallbackText = text => text.replace(/[&<>\[\]`\\\r]/g, char => `&#${char.charCodeAt(0)};`);
+
+function* fallbackUrlSpans(text) {
+  let previousEnd = 0;
+  for (const match of text.matchAll(FALLBACK_URL_START)) {
+    if (match.index < previousEnd) continue;
+    const [prefix, wrapperStart, urlWrapper] = match;
+    const start = match.index + (wrapperStart?.length ?? 0);
+    const afterScheme = match.index + prefix.length;
+    let end = afterScheme;
+    let depth = 0;
+    for (; end < text.length; end++) {
+      const char = text[end];
+      if (/[\s"'`<>]/.test(char)) break;
+      if (char === '(') depth++;
+      else if (char === ')') {
+        if (!depth) break;
+        depth--;
+      }
+    }
+    if (end === afterScheme) continue;
+    const url = text.slice(start + (urlWrapper?.length ?? 0), end);
+    const urlCloser = urlWrapper === '<' ? '>' : urlWrapper;
+    if (urlCloser && text[end] === urlCloser) end++;
+    const wrapperEnd = wrapperStart && /^[ \t]*\)/.exec(text.slice(end))?.[0];
+    previousEnd = end + (wrapperEnd?.length ?? 0);
+    yield { start: wrapperEnd ? match.index : start, end: previousEnd, url };
+  }
+}
+
+function* splitListUrls(list) {
+  let start = 0;
+  for (const { start: from, end } of fallbackUrlSpans(list)) {
+    yield list.slice(start, from);
+    const separator = /^[ \t]*[,;]/.exec(list.slice(end))?.[0];
+    start = end + (separator?.length ?? 0);
+  }
+  yield list.slice(start);
+}
+
+function shownFileRef(ref, ranges) {
+  const [, path, from, to = from] = FILE_REF.exec(ref.trim()) ?? [];
+  const next = ranges.get(path)?.reduce((line, [first, last]) => first <= line ? Math.max(line, last + 1) : line, +from);
+  if (+from <= +to && next > +to) return `${path}:${+from}${+from === +to ? '' : `-${+to}`}`;
+}
+
+function stripFallbackRefs(body, ranges, bodyUnverified) {
+  const stripFileRefs = text => text.replace(INLINE_FILE_REF, ref => {
+    if (!shownFileRef(ref, ranges)) bodyUnverified.add(ref.replace(/^`|`$|[.,;:!?]+$/g, ''));
+    return '';
+  });
+  let start = 0, text = '';
+  for (const { start: from, end, url } of fallbackUrlSpans(body)) {
+    text += stripFileRefs(body.slice(start, from));
+    bodyUnverified.add(url.replace(/[.,;:!?]+$/, ''));
+    start = end;
+  }
+  return text + stripFileRefs(body.slice(start));
+}
+
+function* shownFileRefs(list, paths, ranges) {
+  for (let tail of splitListUrls(list)) {
+    tail = tail.trim();
+    while (tail) {
+      let token;
+      if (!tail.startsWith('`')) {
+        for (const path of paths) {
+          if (!tail.startsWith(`${path}:`)) continue;
+          const lines = LIST_FILE_LINES.exec(tail.slice(path.length));
+          if (!lines) continue;
+          token = path + lines[0];
+          break;
+        }
+      }
+      token ??= LIST_TOKEN.exec(tail)?.[0];
+      if (!token) break;
+      const ref = shownFileRef(token, ranges);
+      if (ref) yield ref;
+      tail = tail.slice(token.length).replace(/^\s*[,;]\s*/, '');
+    }
+  }
+}
+
+function splitFallbackFinding(line) {
+  const finding = /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\)\.?(?: — VERIFIED=unverified \(no_fetch_files_mode\))?\s*$/.exec(line)?.[1];
+  if (!finding) return [];
+  let depth = 1;
+  let quoted = false;
+  for (let index = finding.length - 1; index > 0; index--) {
+    const char = finding[index];
+    if (char === '`') quoted = !quoted;
+    if (quoted) continue;
+    if (char === ')') depth++;
+    else if (char === '(' && --depth === 0) {
+      if (/\s/.test(finding[index - 1])) return [finding.slice(0, index).trimEnd(), finding.slice(index + 1)];
+      break;
+    }
+  }
+  return [];
+}
+
+function fileFallback(reports, shards, useful, cap, russian) {
+  const followup = shardRanges(cap ? useful.map(r => shards[r.id - 1]) : [], cap);
+  const refs = new Map(), items = new Set(), bodyUnverified = new Set();
+  for (const { id, ok, sourceResult, text: report } of reports) {
+    if (!ok || sourceResult.status !== 'ok') continue;
+    const ranges = id > shards.length ? followup : shardRanges([shards[id - 1]]);
+    const paths = [...ranges.keys()].sort((left, right) => right.length - left.length);
+    const section = report.split(/^\s*#+[ \t]+/m).find(part => /^Findings\s*\n/i.test(part));
+    for (const line of section?.split('\n') ?? []) {
+      if (items.size >= 12) break;
+      const [body, list] = splitFallbackFinding(line);
+      if (!list || /^status\s*=\s*unavailable\b/i.test(body)) continue;
+      const cited = new Set(shownFileRefs(list, paths, ranges));
+      if (!cited.size) continue;
+      const text = escapeFallbackText(stripFallbackRefs(body, ranges, bodyUnverified).trim().slice(0, 360));
+      if (!text) continue;
+      for (const ref of cited) if (!refs.has(ref)) refs.set(ref, refs.size + 1);
+      items.add(`- ${text} ${[...cited].map(ref => `[${refs.get(ref)}]`).join(' ')}`);
+    }
+  }
+  const note = russian ? 'Неполный ответ: выводы не сверены.' : 'Incomplete answer: claims were not verified.';
+  const total = refs.size;
+  const markdown = total ? [note, '', ...items, '', russian ? '## Источники' : '## Sources',
+    ...[...refs].map(([ref, number]) => `${number}. ${escapeFallbackText(ref)}`)].join('\n') :
+    `${note} ${russian ? 'Нет сверенных ссылок.' : 'No checked file citations.'}`;
+  return { markdown, check: { hasList: !!total, total, verified: total, unverified: [], bodyUnverified: [...bodyUnverified],
+    missingRefs: [], unusedRefs: [], verification: [] } };
+}
+
 const NOT_FOUND_MARK = ' — **source not found in worker reports**';
 
 /**
@@ -689,7 +842,7 @@ export async function swarmSearch(opts) {
   let jobs = [];
   let concurrency;
   let plannedBy = fixedWorkers ? 'fixed' : 'auto';
-  let shardTexts = [];
+  let shards, followupCap;
   let ranking = null;
   if (mode === 'files') {
     if (!paths.length) throw new Error('mode=files requires paths');
@@ -710,11 +863,10 @@ export async function swarmSearch(opts) {
     const maxChars = fixedWorkers
       ? Math.max(8_000, Math.min(DEFAULTS.fixedShardChars, Math.ceil(totalChars / fixedWorkers)))
       : DEFAULTS.shardChars;
-    const shards = await buildShards(files, { maxChars });
+    shards = await buildShards(files, { maxChars });
     if (!shards.length) throw new Error('no readable text files found under given paths');
     concurrency = fixedWorkers ?? Math.min(shards.length, DEFAULTS.maxAutoWorkers);
     progress(`${files.length} files → ${shards.length} shards, ${concurrency} parallel workers`);
-    shardTexts = shards.map((s) => s.text);
     jobs = shards.map((shard, i) => ({
       id: i + 1,
       label: `shard ${i + 1}: ${shard.files.slice(0, 3).join(', ')}${shard.files.length > 3 ? ` +${shard.files.length - 3}` : ''}`,
@@ -808,8 +960,8 @@ export async function swarmSearch(opts) {
         let context = '';
         if (mode === 'files') {
           // Дозакрываем по шардам, где что-то нашлось; режем по общему лимиту, чтобы не раздуть промпт.
-          const relevant = useful1.map((r) => shardTexts[r.id - 1]).filter(Boolean).join('\n');
-          const cap = DEFAULTS.shardChars * 2;
+          const relevant = useful1.map((r) => shards[r.id - 1].text).join('\n');
+          const cap = followupCap = DEFAULTS.shardChars * 2;
           context = wrapUntrusted(relevant.length > cap ? relevant.slice(0, cap) + '\n[... truncated ...]' : relevant, dataTag, 'files of relevant shards');
         }
         const jobs2 = followups.map((fq, i) => ({
@@ -913,8 +1065,9 @@ export async function swarmSearch(opts) {
     serviceCalls.push({ error: err });
     synthesisFailure = { stage: synthesisStage, code: err.code || 'SYNTHESIS_FAILED', reason: String(err.message || err) };
   }
-  const { markdown: checkedAnswer, check: sourceCheck } = verifySources(synthesisCompleted ? String(synthesis.text || '').trim() : '', allReports);
-  let answer = synthesisCompleted ? markUntrustedSynthesis(checkedAnswer, mode) + (parsed.ok ? '' :
+  const fallback = mode === 'files' && synthesisFailure && fileFallback(allReports, shards, useful1, followupCap, russian);
+  const { markdown: checkedAnswer, check: sourceCheck } = fallback || verifySources(synthesisCompleted ? String(synthesis.text || '').trim() : '', allReports);
+  let answer = synthesisCompleted || fallback ? markUntrustedSynthesis(checkedAnswer, mode) + (!synthesisCompleted || parsed.ok ? '' :
     `\n\n_Format check: ${parsed.violation.id}: ${parsed.violation.text} (${parsed.violation.detail})._`) : '';
   if (synthesisFailure) {
     status = 'partial';
