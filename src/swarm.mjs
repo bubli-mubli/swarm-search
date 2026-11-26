@@ -345,16 +345,16 @@ const INLINE_FILE_REF = new RegExp(String.raw`(?:\x60[^:\x60]+|[\p{L}\p{N}_.@~/\
 const LIST_REF_END = String.raw`(?=\s*(?:[,;]|$))`;
 const LIST_FILE_LINES = new RegExp(String.raw`^${FILE_LINES}${LIST_REF_END}`);
 const LIST_TOKEN = new RegExp(String.raw`^(?:\x60[^\x60]*\x60|[^\x60]+?${FILE_LINES})${LIST_REF_END}`);
-const FALLBACK_URL_START = /(\([ \t]*)?(["'`<])?https?:\/\//gi;
+const FALLBACK_URL_START = /https?:\/\//gi;
+const FALLBACK_URL_CLOSERS = { '(': ')', '"': '"', "'": "'", '`': '`', '<': '>' };
 const escapeFallbackText = text => text.replace(/[&<>\[\]`\\\r]/g, char => `&#${char.charCodeAt(0)};`);
 
 function* fallbackUrlSpans(text) {
   let previousEnd = 0;
   for (const match of text.matchAll(FALLBACK_URL_START)) {
-    if (match.index < previousEnd) continue;
-    const [prefix, wrapperStart, urlWrapper] = match;
-    const start = match.index + (wrapperStart?.length ?? 0);
-    const afterScheme = match.index + prefix.length;
+    let start = match.index;
+    if (start < previousEnd) continue;
+    const afterScheme = start + match[0].length;
     let end = afterScheme;
     let depth = 0;
     for (; end < text.length; end++) {
@@ -367,12 +367,19 @@ function* fallbackUrlSpans(text) {
       }
     }
     if (end === afterScheme) continue;
-    const url = text.slice(start + (urlWrapper?.length ?? 0), end);
-    const urlCloser = urlWrapper === '<' ? '>' : urlWrapper;
-    if (urlCloser && text[end] === urlCloser) end++;
-    const wrapperEnd = wrapperStart && /^[ \t]*\)/.exec(text.slice(end))?.[0];
-    previousEnd = end + (wrapperEnd?.length ?? 0);
-    yield { start: wrapperEnd ? match.index : start, end: previousEnd, url };
+    const url = text.slice(start, end);
+    while (start > previousEnd && end < text.length) {
+      let opening = start - 1, closing = end;
+      while (opening > previousEnd && /[ \t]/.test(text[opening])) opening--;
+      const closer = FALLBACK_URL_CLOSERS[text[opening]];
+      if (!closer) break;
+      while (closing < text.length && /[ \t]/.test(text[closing])) closing++;
+      if (text[closing] !== closer) break;
+      start = opening;
+      end = closing + 1;
+    }
+    previousEnd = end;
+    yield { start, end, url };
   }
 }
 

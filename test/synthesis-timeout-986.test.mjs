@@ -313,6 +313,43 @@ for (const [scenario, finding, unverified, claim = 'Inspect'] of [
   });
 }
 
+const urlWithFileSuffixes = `${parenUrl},ghost.txt:1,package.json:6`;
+
+for (const [scenario, reference, wrappedReference, sourceLine, acceptsPlain = true] of [
+  ['keeps the file citation after a parenthesized URL',
+    `${parenUrl}, package.json:6`, `((${parenUrl})),package.json:6`, 6],
+  ['does not verify comma suffixes within a URL',
+    urlWithFileSuffixes, `"(${urlWithFileSuffixes})",package.json:7`, 7, false],
+  ['keeps the file citation after a quoted URL',
+    `"${parenUrl}",package.json:6`, `( ("${parenUrl}") ),package.json:6`, 6],
+]) {
+  test(`1336: ${scenario}`, async t => {
+    const f = fixture(t, { available: ['arcodex-cli'] });
+    const lookup = t.mock.method(dns, 'lookup', async () => assert.fail('no DNS calls in files mode'));
+    const findings = [`- PLAIN_1336 (${reference})`, `- WRAPPED_1336 (${wrappedReference})`];
+    t.mock.method(byId['arcodex-cli'], 'complete', async request => {
+      assert.equal(request.web, false);
+      if (request.system.startsWith('You are the synthesizer')) throw new Error('fixture connection refused');
+      assert.match(request.prompt, /===== FILE: package\.json =====\n(?:[^\n]*\n){5} +6\|[^\n]*\n +7\|/);
+      return { text: `## Findings\n${findings.join('\n')}\n## Not found\n- none` };
+    });
+    const result = await within(t, swarmSearch({ ...f.options, paths: ['package.json'] }));
+    assertRaw(result, 'synthesis');
+    assert.equal(lookup.mock.callCount(), 0);
+    for (const finding of findings) {
+      assert.ok(result.report.workers[0].text.includes(`${finding} — VERIFIED=unverified (no_fetch_files_mode)`));
+    }
+    assert.equal(result.report.sourceCheck.verified, 1);
+    assert.equal(result.report.sourceCheck.total, 1);
+    const summary = result.markdown.split('## Raw worker reports')[0];
+    assert.match(summary, /^- WRAPPED_1336 \[1\]/m);
+    assert.match(summary, new RegExp(String.raw`^1\. package\.json:${sourceLine}\b`, 'm'));
+    assert.doesNotMatch(summary, /https:\/\/|ghost\.txt:1/);
+    if (acceptsPlain) assert.match(summary, /^- PLAIN_1336 \[1\]/m);
+    else assert.doesNotMatch(summary, /PLAIN_1336|package\.json:6\b/);
+  });
+}
+
 for (const [scenario, reference, verified] of [
   ['does not verify the comma suffix of a URL', 'https://example.org/draft,package.json:6', 0],
   ['keeps the real file citation after a URL with a fake citation in it', 'https://example.org/draft,package.json:7 package.json:6', 1],
