@@ -85,6 +85,7 @@ for (const confirmed of [true, false]) {
     const lookup = t.mock.method(dns, 'lookup', async () => assert.fail('no DNS calls in files mode'));
     const text = '## Findings\n' +
       (confirmed ? '- LOCAL_1307 (output-provenance.mjs:3-5, invented.mjs:1)\n' : '') +
+      '- OVERSIZED_1307 (output-provenance.mjs:3-9000)\n' +
       '- OUTSIDE_1307 (output-provenance.mjs:55-99)\n' +
       '- REVERSED_1307 (output-provenance.mjs:9-2)\n' +
       '- ABSOLUTE_1307 (/output-provenance.mjs:7)\n' +
@@ -112,7 +113,7 @@ for (const confirmed of [true, false]) {
     assert.equal(result.report.sourceCheck.verified, Number(confirmed));
     assert.equal(result.report.sourceCheck.total, Number(confirmed));
     assert.match(summary, /incomplete/i);
-    assert.doesNotMatch(summary, /OUTSIDE_1307|REVERSED_1307|ABSOLUTE_1307|UNSEEN_1307|UNCERTAIN_1307|invented\.mjs:1/);
+    assert.doesNotMatch(summary, /OVERSIZED_1307|OUTSIDE_1307|REVERSED_1307|ABSOLUTE_1307|UNSEEN_1307|UNCERTAIN_1307|invented\.mjs:1/);
     if (confirmed) {
       assert.match(summary, /LOCAL_1307[^\n]*\[1\]/);
       assert.match(summary, /^1\. output-provenance\.mjs:3-5\b/m);
@@ -123,10 +124,10 @@ for (const confirmed of [true, false]) {
   });
 }
 
-async function fileCitationFallback(t, path, reference, status = 'ok') {
+async function fileCitationFallback(t, path, reference, status = 'ok', otherFindings = '') {
   const f = fixture(t, { available: ['arcodex-cli'] });
   const lookup = t.mock.method(dns, 'lookup', async () => assert.fail('no DNS calls in files mode'));
-  const text = `## Findings\n- FINDING_1307 (${reference})\n## Not found\n- none`;
+  const text = `## Findings\n- FINDING_1307 (${reference})\n${otherFindings}## Not found\n- none`;
   const complete = t.mock.method(byId['arcodex-cli'], 'complete', async request => {
     assert.equal(request.web, false);
     if (request.system.startsWith('You are the synthesizer')) throw new Error('fixture connection refused');
@@ -146,6 +147,7 @@ async function fileCitationFallback(t, path, reference, status = 'ok') {
 
 for (const [scenario, path, reference, verified] of [
   ['does not match a path by suffix', 'src/output-provenance.mjs', 'archive/old output-provenance.mjs:3-5', 0],
+  ['does not match a path after collapsing unshown segments', 'src/output-provenance.mjs', 'archive/../output-provenance.mjs:3-5', 0],
   ['checks the end of a spaced line range', 'src/output-provenance.mjs', 'output-provenance.mjs:3 - 9000', 0],
   ['accepts a displayed file without an extension', 'LICENSE', 'LICENSE:1-3', 1],
 ]) {
@@ -162,6 +164,17 @@ for (const [scenario, path, reference, verified] of [
     }
   });
 }
+
+test('FAILS_ON_OLD 1307: files fallback checks findings individually in a partial report', async t => {
+  const { report, summary } = await fileCitationFallback(t, 'src/output-provenance.mjs', 'output-provenance.mjs:3-5', 'partial',
+    '- status=unavailable: MISSING_1307 (output-provenance.mjs:7)\n');
+  assert.equal(report.workers[0].ok, true);
+  assert.equal(report.workers[0].status, 'partial');
+  assert.equal(report.sourceCheck.verified, 1);
+  assert.equal(report.sourceCheck.total, 1);
+  assert.match(summary, /FINDING_1307[^\n]*\[1\]/);
+  assert.doesNotMatch(summary, /MISSING_1307|output-provenance\.mjs:7/);
+});
 
 test('FAILS_ON_OLD 1307: files fallback omits unavailable reports even when the call succeeded', async t => {
   const { report, summary } = await fileCitationFallback(t, 'src/output-provenance.mjs', 'output-provenance.mjs:3-5', 'unavailable');

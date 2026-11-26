@@ -2,7 +2,6 @@
 import { resolveProviders, detectAvailable, byId } from './providers/index.mjs';
 import { collectFiles, assertPathsAllowed, buildShards, rankFiles } from './corpus.mjs';
 import { randomBytes } from 'node:crypto';
-import { normalize } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { verifyWorkerSources, sourceEvidence, stripVerification, verificationMark } from './web-verification.mjs';
 import { responseFormat, extractRefs } from './response-format.mjs';
@@ -353,15 +352,15 @@ function fileFallback(reports, shards, useful, cap, russian) {
     for (const line of section?.split('\n').slice(1) ?? []) {
       if (items.size === 12) break;
       const finding = line.match(/^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s+\(([^()]*)\)\.?\s*$/);
-      if (!finding) continue;
+      if (!finding || /^status\s*=\s*unavailable\b/i.test(finding[1])) continue;
       let text = finding[1];
       for (const ref of extractRefs(text)) text = text.replace(ref, '');
       text = text.trim().slice(0, 360).replace(/[&<>\[\]`\\\r]/g, char => `&#${char.charCodeAt(0)};`);
       if (!text) continue;
       const cited = new Set();
       const references = finding[2].matchAll(/\s*`?([\p{L}\p{N}_.@~ /\\-]+):(\d+)(?:\s*[-–]\s*(\d+))?`?\s*(?:[,;]|$)/guy);
-      for (const [, name, start, end = start] of references) {
-        const path = normalize(name), from = +start, to = +end;
+      for (const [, path, start, end = start] of references) {
+        const from = +start, to = +end;
         if (from > to || !ranges.get(path)?.some(([first, last]) => from >= first && to <= last)) continue;
         const ref = `${path}:${from}${from === to ? '' : `-${to}`}`;
         if (!refs.has(ref)) refs.set(ref, refs.size + 1);
