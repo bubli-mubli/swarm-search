@@ -332,6 +332,50 @@ for (const [scenario, finding, unverified, claim = 'Inspect'] of [
 }
 
 const urlWithFileSuffixes = `${parenUrl},ghost.txt:1,package.json:6`;
+const apostropheUrl = "https://example.org/O'Brien(v2)";
+
+for (const [form, finding, verified = 1, unverifiedUrls = [], claim = 'Inspect'] of [
+  ['double quotes with an apostrophe', `- Inspect ("${apostropheUrl}",package.json:6)`],
+  ['double quotes', `- Inspect ("${parenUrl}",package.json:6)`],
+  ['single quotes', `- Inspect ('${parenUrl}',package.json:6)`],
+  ['typographic quotes', `- Inspect (“${parenUrl}”, package.json:6)`],
+  ['no quotes', `- Inspect (${parenUrl}, package.json:6)`],
+  ['inline URL with details', `- Inspect ${detailUrl} (package.json:6)`, 1, [detailUrl]],
+  ['file-like suffixes inside one URL', `- Inspect (${urlWithFileSuffixes})`, 0],
+  ['typographic quotes with an apostrophe and no space', `- Inspect (“${apostropheUrl}”,package.json:6)`],
+  ['inline double quotes outside the URL', `- Inspect ("${apostropheUrl}") (package.json:6)`, 1, [apostropheUrl]],
+  ['inline typographic quotes and parentheses outside the URL',
+    `- Inspect (“${apostropheUrl}/details”) then compare (package.json:6)`, 1, [`${apostropheUrl}/details`], 'Inspect then compare'],
+]) {
+  test(`1336 URL table: ${form}`, async context => {
+    const { options } = fixture(context, { available: ['arcodex-cli'] });
+    const lookup = context.mock.method(dns, 'lookup', async () => assert.fail('unexpected DNS call in files mode'));
+    const complete = context.mock.method(byId['arcodex-cli'], 'complete', async request => {
+      assert.equal(request.web, false);
+      if (request.system.startsWith('You are the synthesizer')) throw new Error('fixture synthesis unavailable');
+      assert.match(request.prompt, /===== FILE: package\.json =====\n(?:[^\n]*\n){5} +6\|/);
+      return { text: `## Findings\n${finding}\n## Not found\n- none` };
+    });
+    const result = await within(context, swarmSearch({ ...options, paths: ['package.json'] }));
+    assertRaw(result, 'synthesis');
+    assert.equal(complete.mock.callCount(), 2);
+    assert.equal(lookup.mock.callCount(), 0);
+    const [summary, raw] = result.markdown.split('## Raw worker reports');
+    assert.ok(raw?.split('\n').includes(`${finding} — VERIFIED=unverified (no_fetch_files_mode)`),
+      'the raw finding keeps the complete URL and citation syntax');
+
+    assert.equal(result.report.sourceCheck.verified, verified);
+    assert.equal(result.report.sourceCheck.total, verified);
+    assert.deepEqual(result.report.sourceCheck.bodyUnverified, unverifiedUrls);
+    if (verified) {
+      const item = summary.split('\n').find(line => line.startsWith('- Inspect '));
+      assert.equal(item?.replace(/ +/g, ' '), `- ${claim} [1] _[untrusted source: files via worker reports]_`);
+      assert.match(summary, /^1\. package\.json:6(?=\s|$)/m);
+    } else {
+      assert.doesNotMatch(summary, /^## Sources$|^- Inspect\b|ghost\.txt:1\b|package\.json:6\b/m);
+    }
+  });
+}
 
 for (const [scenario, reference, wrappedReference, sourceLine, acceptsPlain = true] of [
   ['keeps the file citation after a parenthesized URL',

@@ -346,8 +346,14 @@ const LIST_REF_END = String.raw`(?=\s*(?:[,;]|$))`;
 const LIST_FILE_LINES = new RegExp(String.raw`^${FILE_LINES}${LIST_REF_END}`);
 const LIST_TOKEN = new RegExp(String.raw`^(?:\x60[^\x60]*\x60|[^\x60]+?${FILE_LINES})${LIST_REF_END}`);
 const FALLBACK_URL_START = /https?:\/\//gi;
-const FALLBACK_URL_CLOSERS = { '(': ')', '"': '"', "'": "'", '`': '`', '<': '>' };
+const FALLBACK_URL_CLOSERS = { '(': ')', '"': '"', "'": "'", '“': '”', '‘': '’', '«': '»', '`': '`', '<': '>' };
 const escapeFallbackText = text => text.replace(/[&<>\[\]`\\\r]/g, char => `&#${char.charCodeAt(0)};`);
+
+function fallbackUrlOpener(text, start, previousEnd) {
+  let opening = start - 1;
+  while (opening >= previousEnd && /[ \t]/.test(text[opening])) opening--;
+  return opening >= previousEnd ? opening : -1;
+}
 
 function* fallbackUrlSpans(text) {
   let previousEnd = 0;
@@ -355,11 +361,13 @@ function* fallbackUrlSpans(text) {
     let start = match.index;
     if (start < previousEnd) continue;
     const afterScheme = start + match[0].length;
+    const opener = text[fallbackUrlOpener(text, start, previousEnd)];
+    const quoteEnd = opener === '(' ? undefined : FALLBACK_URL_CLOSERS[opener];
     let end = afterScheme;
     let depth = 0;
     for (; end < text.length; end++) {
       const char = text[end];
-      if (/[\s"'`<>]/.test(char)) break;
+      if (char === quoteEnd || /[\s"`<>]/.test(char) || (char === "'" && !quoteEnd)) break;
       if (char === '(') depth++;
       else if (char === ')') {
         if (!depth) break;
@@ -369,10 +377,10 @@ function* fallbackUrlSpans(text) {
     if (end === afterScheme) continue;
     const url = text.slice(start, end);
     while (start > previousEnd && end < text.length) {
-      let opening = start - 1, closing = end;
-      while (opening > previousEnd && /[ \t]/.test(text[opening])) opening--;
+      const opening = fallbackUrlOpener(text, start, previousEnd);
       const closer = FALLBACK_URL_CLOSERS[text[opening]];
       if (!closer) break;
+      let closing = end;
       while (closing < text.length && /[ \t]/.test(text[closing])) closing++;
       if (text[closing] !== closer) break;
       start = opening;
